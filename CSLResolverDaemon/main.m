@@ -382,6 +382,29 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
               (unsigned long)skippedRows);
     }
 
+    // Published so Settings can show what the read found. Reading a device log
+    // needs a toolchain most users do not have.
+    CFPreferencesSetAppValue(
+        CFSTR("ResolverAppColumn"),
+        (__bridge CFStringRef)(appColumn ?: @"none"),
+        CSLPreferencesDomain
+    );
+    CFPreferencesSetAppValue(
+        CFSTR("ResolverAppIconCount"),
+        (__bridge CFNumberRef)@(appIconRows),
+        CSLPreferencesDomain
+    );
+    CFPreferencesSetAppValue(
+        CFSTR("ResolverGlyphIconCount"),
+        (__bridge CFNumberRef)@(iconMetadataRows),
+        CSLPreferencesDomain
+    );
+    CFPreferencesSetAppValue(
+        CFSTR("ResolverLastLoadDate"),
+        (__bridge CFDateRef)[NSDate date],
+        CSLPreferencesDomain
+    );
+
     if (CSLCatalogEqualsStoredCatalog(catalog)) {
         CSLPublishResolverState(@"catalog_ready", nil);
         NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_UNCHANGED count=%lu",
@@ -545,7 +568,7 @@ static void CSLPerformInitialLoad(NSUInteger attempt) {
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.4 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.5 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(

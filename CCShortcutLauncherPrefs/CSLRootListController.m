@@ -18,6 +18,7 @@ static CFStringRef const CSLCatalogRequestedNotification =
 @end
 
 static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
+static NSString *const CSLDiagnosticSpecifierKey = @"CSLDiagnostic";
 /// Preferences reads this property to draw the icon on the left of a row.
 static NSString *const CSLSpecifierIconKey = @"iconImage";
 static const CGFloat CSLSpecifierIconSide = 29.0;
@@ -47,6 +48,32 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
             [specifiers addObject:specifier];
         }
 
+        PSSpecifier *diagnosticsGroup = [PSSpecifier emptyGroupSpecifier];
+        [diagnosticsGroup setProperty:@"DIAGNOSTICS" forKey:@"label"];
+        [diagnosticsGroup setProperty:@"What the last read of the Shortcuts database found."
+                               forKey:@"footerText"];
+        [specifiers addObject:diagnosticsGroup];
+
+        NSArray<NSArray<NSString *> *> *diagnostics = @[
+            @[@"Cached Shortcuts", @"cachedShortcuts"],
+            @[@"Glyph Icons", @"glyphIcons"],
+            @[@"App Icons", @"appIcons"],
+            @[@"App Column", @"appColumn"],
+            @[@"Last Reload", @"lastReload"],
+        ];
+        for (NSArray<NSString *> *diagnostic in diagnostics) {
+            PSSpecifier *specifier =
+                [PSSpecifier preferenceSpecifierNamed:diagnostic[0]
+                                               target:self
+                                                  set:NULL
+                                                  get:@selector(diagnosticValueForSpecifier:)
+                                               detail:Nil
+                                                 cell:PSTitleValueCell
+                                                 edit:Nil];
+            [specifier setProperty:diagnostic[1] forKey:CSLDiagnosticSpecifierKey];
+            [specifiers addObject:specifier];
+        }
+
         PSSpecifier *respringGroup = [PSSpecifier emptyGroupSpecifier];
         [respringGroup setProperty:@"Changes apply without a respring. Use this only if Control Center does not pick a change up."
                             forKey:@"footerText"];
@@ -63,7 +90,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         [specifiers addObject:respring];
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.4 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.5 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
@@ -151,6 +178,46 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     if (cell.detailTextLabel.text.length == 0) {
         cell.detailTextLabel.text = [self shortcutSummaryForSpecifier:specifier];
     }
+}
+
+- (id)diagnosticValueForSpecifier:(PSSpecifier *)specifier {
+    id key = [specifier propertyForKey:CSLDiagnosticSpecifierKey];
+    if (![key isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+
+    if ([key isEqualToString:@"cachedShortcuts"]) {
+        return [NSString stringWithFormat:@"%lu",
+            (unsigned long)CSLShortcutCatalog().count];
+    }
+    if ([key isEqualToString:@"glyphIcons"]) {
+        return [self numberStringForKey:CFSTR("ResolverGlyphIconCount")];
+    }
+    if ([key isEqualToString:@"appIcons"]) {
+        return [self numberStringForKey:CFSTR("ResolverAppIconCount")];
+    }
+    if ([key isEqualToString:@"appColumn"]) {
+        NSString *column = [self preferenceStringForKey:CFSTR("ResolverAppColumn")];
+        return column.length > 0 ? column : @"—";
+    }
+    if ([key isEqualToString:@"lastReload"]) {
+        id value = [self preferenceValueForKey:CFSTR("ResolverLastLoadDate")];
+        if (![value isKindOfClass:[NSDate class]]) {
+            return @"Never";
+        }
+        return [NSDateFormatter localizedStringFromDate:(NSDate *)value
+                                              dateStyle:NSDateFormatterShortStyle
+                                              timeStyle:NSDateFormatterShortStyle];
+    }
+    return nil;
+}
+
+- (NSString *)numberStringForKey:(CFStringRef)key {
+    id value = [self preferenceValueForKey:key];
+    if (![value isKindOfClass:[NSNumber class]]) {
+        return @"—";
+    }
+    return [(NSNumber *)value stringValue];
 }
 
 - (void)confirmRespring {
