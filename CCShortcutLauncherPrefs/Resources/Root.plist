@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>MY SHORTCUTS</string>
 			<key>footerText</key>
-			<string>Load names, identifiers, and icons from My Shortcuts into a local cache. The database is read only when this button is tapped. Loading never assigns Shortcuts to a module.</string>
+			<string>The cache follows My Shortcuts on its own: the resolver watches the Shortcuts database and reloads names, identifiers, and icons a few seconds after a change. Use this button to force a reload. Loading never assigns Shortcuts to a module.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -68,6 +68,6 @@
 		</dict>
 	</array>
 	<key>title</key>
-	<string>Shortcut Launcher</string>
+	<string>CCShortcutLauncher</string>
 </dict>
 </plist>

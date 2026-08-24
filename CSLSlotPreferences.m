@@ -156,9 +156,9 @@ NSString *CSLDisplayNameForSlot(NSUInteger slot) {
         return name;
     }
     if (slot == 0 && CSLModuleSlotCount() == 1) {
-        return @"Shortcut Launcher";
+        return @"CCShortcutLauncher";
     }
-    return [NSString stringWithFormat:@"Shortcut Launcher %lu", (unsigned long)(slot + 1)];
+    return [NSString stringWithFormat:@"CCShortcutLauncher %lu", (unsigned long)(slot + 1)];
 }
 
 NSArray<NSDictionary<NSString *, id> *> *CSLShortcutCatalog(void) {

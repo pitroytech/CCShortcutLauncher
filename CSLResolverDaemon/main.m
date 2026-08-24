@@ -1,16 +1,34 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 
+#import <fcntl.h>
 #import <sqlite3.h>
 #import <stdint.h>
 #import <unistd.h>
 
+static NSString *const CSLDatabaseDirectory =
+    @"/private/var/mobile/Library/Shortcuts";
 static NSString *const CSLDatabasePath =
     @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite";
 static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
+
+/// Shortcuts writes through a WAL, so a single edit produces a burst of file
+/// events. Coalesce them instead of reading the database once per event.
+static const int64_t CSLRefreshDebounceNanoseconds = 3 * NSEC_PER_SEC;
+static const int64_t CSLWatchRearmNanoseconds = 2 * NSEC_PER_SEC;
+static const int64_t CSLInitialLoadNanoseconds = 5 * NSEC_PER_SEC;
+static const int64_t CSLInitialRetryNanoseconds = 30 * NSEC_PER_SEC;
+static const NSUInteger CSLInitialLoadAttemptLimit = 4;
+
+static dispatch_source_t CSLDatabaseWatchSource = nil;
+static dispatch_source_t CSLDirectoryWatchSource = nil;
+static uint64_t CSLRefreshGeneration = 0;
+
+static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser);
+static void CSLStartWatchingDatabase(void);
 
 static BOOL CSLPublishResolverState(NSString *state, NSString *message) {
     CFPreferencesSetAppValue(
@@ -63,8 +81,31 @@ static BOOL CSLTableHasColumn(sqlite3 *database, NSString *table, NSString *colu
     return found;
 }
 
-static void CSLLoadShortcutCatalog(void) {
-    CSLPublishResolverState(@"catalog_loading", nil);
+/// Automatic refreshes must not leave an error behind: the Settings UI polls
+/// ResolverState after a manual request and would read a stale failure.
+static void CSLReportFailure(BOOL requestedByUser, NSString *message, NSString *reason) {
+    if (requestedByUser) {
+        CSLFinishWithError(message);
+        return;
+    }
+    NSLog(@"[CCShortcutLauncher][Resolver] AUTO_REFRESH_SKIPPED reason=%@", reason);
+}
+
+static BOOL CSLCatalogEqualsStoredCatalog(NSArray<NSDictionary<NSString *, id> *> *catalog) {
+    CFPropertyListRef value =
+        CFPreferencesCopyAppValue(CFSTR("ShortcutsCatalog"), CSLPreferencesDomain);
+    if (value == NULL) {
+        return NO;
+    }
+    id stored = CFBridgingRelease(value);
+    return [stored isKindOfClass:[NSArray class]] &&
+        [(NSArray *)stored isEqualToArray:catalog];
+}
+
+static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
+    if (requestedByUser) {
+        CSLPublishResolverState(@"catalog_loading", nil);
+    }
 
     sqlite3 *database = NULL;
     int result = sqlite3_open_v2(
@@ -83,10 +124,12 @@ static void CSLLoadShortcutCatalog(void) {
         if (database != NULL) {
             sqlite3_close(database);
         }
-        CSLFinishWithError(
-            @"The Shortcuts database is unavailable. Unlock the device and try again."
+        CSLReportFailure(
+            requestedByUser,
+            @"The Shortcuts database is unavailable. Unlock the device and try again.",
+            @"db_open_failed"
         );
-        return;
+        return NO;
     }
     sqlite3_busy_timeout(database, 1000);
 
@@ -142,8 +185,12 @@ static void CSLLoadShortcutCatalog(void) {
               result,
               sqlite3_errmsg(database));
         sqlite3_close(database);
-        CSLFinishWithError(@"Unable to read the Shortcut catalog. Try again.");
-        return;
+        CSLReportFailure(
+            requestedByUser,
+            @"Unable to read the Shortcut catalog. Try again.",
+            @"db_query_prepare_failed"
+        );
+        return NO;
     }
 
     NSMutableArray<NSDictionary<NSString *, id> *> *catalog =
@@ -212,8 +259,12 @@ static void CSLLoadShortcutCatalog(void) {
               sqlite3_errmsg(database));
         sqlite3_finalize(statement);
         sqlite3_close(database);
-        CSLFinishWithError(@"Unable to read the complete Shortcut catalog. Try again.");
-        return;
+        CSLReportFailure(
+            requestedByUser,
+            @"Unable to read the complete Shortcut catalog. Try again.",
+            @"db_query_step_failed"
+        );
+        return NO;
     }
 
     sqlite3_finalize(statement);
@@ -234,8 +285,19 @@ static void CSLLoadShortcutCatalog(void) {
     if (catalog.count == 0) {
         NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_EMPTY skipped=%lu",
               (unsigned long)skippedRows);
-        CSLFinishWithError(@"No valid Shortcuts were found in My Shortcuts.");
-        return;
+        CSLReportFailure(
+            requestedByUser,
+            @"No valid Shortcuts were found in My Shortcuts.",
+            @"catalog_empty"
+        );
+        return NO;
+    }
+
+    if (CSLCatalogEqualsStoredCatalog(catalog)) {
+        CSLPublishResolverState(@"catalog_ready", nil);
+        NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_UNCHANGED count=%lu",
+              (unsigned long)catalog.count);
+        return YES;
     }
 
     CFPreferencesSetAppValue(
@@ -256,6 +318,7 @@ static void CSLLoadShortcutCatalog(void) {
           (unsigned long)iconMetadataRows,
           (unsigned long)completeIconRows,
           synchronized);
+    return YES;
 }
 
 static void CSLCatalogRequested(
@@ -267,13 +330,131 @@ static void CSLCatalogRequested(
 ) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_REQUESTED");
-        CSLLoadShortcutCatalog();
+        CSLLoadShortcutCatalog(YES);
     });
+}
+
+static void CSLScheduleAutomaticRefresh(void) {
+    CSLRefreshGeneration++;
+    uint64_t generation = CSLRefreshGeneration;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, CSLRefreshDebounceNanoseconds),
+        dispatch_get_main_queue(),
+        ^{
+            if (generation != CSLRefreshGeneration) {
+                return;
+            }
+            CSLLoadShortcutCatalog(NO);
+        }
+    );
+}
+
+static dispatch_source_t CSLMakeVnodeSource(NSString *path,
+                                            unsigned long mask,
+                                            void (^handler)(unsigned long flags)) {
+    int descriptor = open(path.fileSystemRepresentation, O_EVTONLY);
+    if (descriptor < 0) {
+        return nil;
+    }
+
+    dispatch_source_t source = dispatch_source_create(
+        DISPATCH_SOURCE_TYPE_VNODE,
+        (uintptr_t)descriptor,
+        mask,
+        dispatch_get_main_queue()
+    );
+    if (source == nil) {
+        close(descriptor);
+        return nil;
+    }
+
+    // Weak, so the source does not retain itself through its own handler.
+    __weak dispatch_source_t weakSource = source;
+    dispatch_source_set_event_handler(source, ^{
+        dispatch_source_t liveSource = weakSource;
+        if (liveSource == nil) {
+            return;
+        }
+        handler(dispatch_source_get_data(liveSource));
+    });
+    dispatch_source_set_cancel_handler(source, ^{
+        close(descriptor);
+    });
+    dispatch_resume(source);
+    return source;
+}
+
+static void CSLRearmWatchLater(void) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, CSLWatchRearmNanoseconds),
+        dispatch_get_main_queue(),
+        ^{
+            CSLStartWatchingDatabase();
+        }
+    );
+}
+
+static void CSLStartWatchingDatabase(void) {
+    if (CSLDirectoryWatchSource != nil) {
+        dispatch_source_cancel(CSLDirectoryWatchSource);
+        CSLDirectoryWatchSource = nil;
+    }
+    if (CSLDatabaseWatchSource != nil) {
+        dispatch_source_cancel(CSLDatabaseWatchSource);
+        CSLDatabaseWatchSource = nil;
+    }
+
+    // The directory sees the WAL and shared-memory files come and go around a
+    // write, and it also sees the database being replaced by a restore.
+    CSLDirectoryWatchSource = CSLMakeVnodeSource(
+        CSLDatabaseDirectory,
+        DISPATCH_VNODE_WRITE | DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME,
+        ^(__unused unsigned long flags) {
+            CSLScheduleAutomaticRefresh();
+            if (CSLDatabaseWatchSource == nil) {
+                // The database did not exist when the watch was set up.
+                CSLRearmWatchLater();
+            }
+        }
+    );
+
+    // The database file itself sees checkpoints landing in the main file.
+    CSLDatabaseWatchSource = CSLMakeVnodeSource(
+        CSLDatabasePath,
+        DISPATCH_VNODE_WRITE | DISPATCH_VNODE_EXTEND | DISPATCH_VNODE_ATTRIB |
+            DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME,
+        ^(unsigned long flags) {
+            CSLScheduleAutomaticRefresh();
+            if ((flags & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME)) != 0) {
+                // This descriptor no longer points at the live database.
+                CSLRearmWatchLater();
+            }
+        }
+    );
+
+    NSLog(@"[CCShortcutLauncher][Resolver] WATCHING directory=%d database=%d",
+          CSLDirectoryWatchSource != nil,
+          CSLDatabaseWatchSource != nil);
+}
+
+static void CSLPerformInitialLoad(NSUInteger attempt) {
+    if (CSLLoadShortcutCatalog(NO) || attempt + 1 >= CSLInitialLoadAttemptLimit) {
+        return;
+    }
+
+    // Right after boot the database can still be locked behind first unlock.
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, CSLInitialRetryNanoseconds),
+        dispatch_get_main_queue(),
+        ^{
+            CSLPerformInitialLoad(attempt + 1);
+        }
+    );
 }
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.3.0 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.1 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(
@@ -283,6 +464,15 @@ int main(__unused int argc, __unused char *argv[]) {
             CSLCatalogRequestedNotification,
             NULL,
             CFNotificationSuspensionBehaviorDeliverImmediately
+        );
+
+        CSLStartWatchingDatabase();
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, CSLInitialLoadNanoseconds),
+            dispatch_get_main_queue(),
+            ^{
+                CSLPerformInitialLoad(0);
+            }
         );
 
         NSLog(@"[CCShortcutLauncher][Resolver] WAITING_FOR_REQUEST");

@@ -37,7 +37,7 @@ static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
         }
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.0 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.1 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 

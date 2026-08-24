@@ -70,7 +70,7 @@
 - (NSString *)displayNameForModuleIdentifier:(NSString *)identifier {
     NSUInteger slot = [self slotForModuleIdentifier:identifier];
     if (slot == NSNotFound) {
-        return @"Shortcut Launcher";
+        return @"CCShortcutLauncher";
     }
     return CSLDisplayNameForSlot(slot);
 }

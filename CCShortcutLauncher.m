@@ -213,7 +213,7 @@ static void CSLCollectViewControllers(
         } else if (loadedCatalog.count > 0) {
             message = @"Open Settings \u2192 Control Center, tap this module, and add Shortcuts to it.";
         } else {
-            message = @"Open Settings \u2192 Shortcut Launcher and tap Load My Shortcuts.";
+            message = @"Open Settings \u2192 CCShortcutLauncher and tap Load My Shortcuts.";
         }
         UIAlertController *popup = [UIAlertController
             alertControllerWithTitle:CSLDisplayNameForSlot(self.slot)

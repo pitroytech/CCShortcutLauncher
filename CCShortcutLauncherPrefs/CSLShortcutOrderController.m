@@ -180,7 +180,7 @@
         return @"With one Shortcut the module runs it straight away, without a popup, and shows its icon in Control Center.";
     }
     if (section == 1 && self.catalog.count == 0) {
-        return @"Return to Shortcut Launcher and tap Load My Shortcuts first.";
+        return @"Return to CCShortcutLauncher and tap Load My Shortcuts first.";
     }
     if (section == 1 && self.availableEntries.count == 0) {
         return @"All loaded Shortcuts are already in this module.";
