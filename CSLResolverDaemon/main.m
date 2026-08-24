@@ -454,7 +454,7 @@ static void CSLPerformInitialLoad(NSUInteger attempt) {
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.1 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.2 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(

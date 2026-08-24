@@ -1,5 +1,6 @@
 #import "CSLRootListController.h"
 #import "CSLShortcutOrderController.h"
+#import "../CSLShortcutIcon.h"
 #import "../CSLSlotPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
@@ -10,7 +11,15 @@ static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
+/// Declared here because the Preferences headers do not always ship it.
+@interface PSListController (CSLSpecifierLookup)
+- (PSSpecifier *)specifierAtIndexPath:(NSIndexPath *)indexPath;
+@end
+
 static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
+/// Preferences reads this property to draw the icon on the left of a row.
+static NSString *const CSLSpecifierIconKey = @"iconImage";
+static const CGFloat CSLSpecifierIconSide = 29.0;
 
 @implementation CSLRootListController
 
@@ -27,17 +36,18 @@ static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
                 [PSSpecifier preferenceSpecifierNamed:CSLDisplayNameForSlot(slot)
                                                target:self
                                                   set:NULL
-                                                  get:NULL
+                                                  get:@selector(shortcutSummaryForSpecifier:)
                                                detail:Nil
                                                  cell:PSLinkCell
                                                  edit:Nil];
             specifier->action = @selector(openModuleSlot:);
             [specifier setProperty:@(slot) forKey:CSLSlotSpecifierKey];
+            [specifier setProperty:[self iconForSlot:slot] forKey:CSLSpecifierIconKey];
             [specifiers addObject:specifier];
         }
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.1 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.2 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
@@ -54,13 +64,83 @@ static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
     [self reloadSpecifiers];
 }
 
-- (void)openModuleSlot:(PSSpecifier *)specifier {
+/// Returns NSNotFound for the rows that are not a module.
+- (NSUInteger)slotForSpecifier:(PSSpecifier *)specifier {
     id slotValue = [specifier propertyForKey:CSLSlotSpecifierKey];
-    NSUInteger slot = [slotValue isKindOfClass:[NSNumber class]]
-        ? [(NSNumber *)slotValue unsignedIntegerValue]
-        : 0;
+    if (![slotValue isKindOfClass:[NSNumber class]]) {
+        return NSNotFound;
+    }
+    return [(NSNumber *)slotValue unsignedIntegerValue];
+}
+
+/// Mirrors what Control Center shows: a module holding one Shortcut wears that
+/// Shortcut's icon, anything else falls back to the generic grid.
+- (UIImage *)iconForSlot:(NSUInteger)slot {
+    NSArray<NSDictionary<NSString *, id> *> *entries = CSLEntriesForSlot(slot);
+    if (entries.count == 1) {
+        return CSLShortcutIconImageForEntry(
+            entries.firstObject,
+            CGSizeMake(CSLSpecifierIconSide, CSLSpecifierIconSide)
+        );
+    }
+
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:20.0
+                                                        weight:UIImageSymbolWeightRegular];
+    UIImage *symbol = [UIImage systemImageNamed:@"square.grid.2x2"
+                              withConfiguration:configuration];
+    return [symbol imageWithTintColor:[UIColor systemGrayColor]
+                        renderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
+- (id)shortcutSummaryForSpecifier:(PSSpecifier *)specifier {
+    NSUInteger slot = [self slotForSpecifier:specifier];
+    if (slot == NSNotFound) {
+        return nil;
+    }
+
+    NSUInteger count = CSLEntriesForSlot(slot).count;
+    if (count == 0) {
+        return @"None";
+    }
+    return [NSString stringWithFormat:@"%lu Shortcut%@",
+        (unsigned long)count,
+        count == 1 ? @"" : @"s"];
+}
+
+- (void)tableView:(UITableView *)tableView
+    willDisplayCell:(UITableViewCell *)cell
+  forRowAtIndexPath:(NSIndexPath *)indexPath {
+    // Preferences themes its own cells here, but do not assume the superclass
+    // implements an optional delegate method.
+    if ([PSListController instancesRespondToSelector:_cmd]) {
+        [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
+    }
+
+    PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
+    NSUInteger slot = [self slotForSpecifier:specifier];
+    if (slot == NSNotFound) {
+        return;
+    }
+
+    // Indent the modules so they read as entries under the count above them.
+    cell.indentationLevel = 1;
+    cell.indentationWidth = 16.0;
+
+    // The specifier already carries the icon and the summary, but a plain link
+    // cell does not always draw them, so fill in whatever is still empty.
+    if (cell.imageView.image == nil) {
+        cell.imageView.image = [self iconForSlot:slot];
+    }
+    if (cell.detailTextLabel.text.length == 0) {
+        cell.detailTextLabel.text = [self shortcutSummaryForSpecifier:specifier];
+    }
+}
+
+- (void)openModuleSlot:(PSSpecifier *)specifier {
+    NSUInteger slot = [self slotForSpecifier:specifier];
     CSLShortcutOrderController *controller =
-        [[CSLShortcutOrderController alloc] initWithSlot:slot];
+        [[CSLShortcutOrderController alloc] initWithSlot:slot == NSNotFound ? 0 : slot];
     [self.navigationController pushViewController:controller animated:YES];
 }
 
