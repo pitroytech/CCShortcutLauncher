@@ -1,6 +1,6 @@
 # CCShortcutLauncher 1.4.0
 
-Control Center module cho iOS 16 Dopamine/rootless. Settings tải thủ công danh
+Control Center module cho iOS 16 và iOS 17 (rootless). Settings tải thủ công danh
 mục My Shortcuts; mỗi module giữ danh sách Shortcut riêng. Tap module có nhiều
 Shortcut thì hiện popup để chọn, module chỉ có một Shortcut thì chạy thẳng.
 Mọi trường hợp đều chạy nền, không đưa app Shortcuts lên foreground.
@@ -68,7 +68,7 @@ Máy build:
 
 iPhone:
 
-- iOS 16.x và Dopamine/rootless jailbreak.
+- iOS 16.0 - 17.3.1 và jailbreak rootless (Dopamine, palera1n...).
 - CCSupport (`com.opa334.ccsupport`).
 - PreferenceLoader (`preferenceloader`).
 
@@ -131,7 +131,9 @@ idevicesyslog -m '[CCShortcutLauncher]' --no-colors
 - Popup chưa có thanh tìm kiếm; danh sách dài dùng khả năng cuộn của action sheet.
 - Shortcut trùng tên được gắn thêm tám ký tự đầu của UUID để phân biệt.
 - Shortcut yêu cầu UI, mở khóa hoặc cấp quyền mới vẫn có thể cần tương tác.
-- WorkflowKit là private API của iOS; package giới hạn firmware ở iOS 16.x.
+- WorkflowKit là private API của iOS. Package giới hạn firmware ở `>= 16.0`
+  và `<< 17.4`: đã chạy được tới 17.3.1, từ 17.4 trở lên chưa kiểm chứng nên
+  không mở.
 - Khi tạo, đổi tên hoặc xóa Shortcut, cần bấm lại **Load My Shortcuts**.
 - Cache cũ không có metadata icon sẽ dùng icon dự phòng cho tới khi bấm
   lại **Load My Shortcuts**.
