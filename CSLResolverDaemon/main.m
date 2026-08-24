@@ -81,6 +81,37 @@ static BOOL CSLTableHasColumn(sqlite3 *database, NSString *table, NSString *colu
     return found;
 }
 
+/// Shortcuts can show an app's own icon instead of a glyph, and that icon is
+/// not in ZGLYPHNUMBER. Log the column names once so the storage can be found
+/// without guessing at the schema.
+static void CSLLogIconSchemaOnce(sqlite3 *database) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        for (NSString *table in @[@"ZSHORTCUT", @"ZSHORTCUTICON"]) {
+            NSString *pragma =
+                [NSString stringWithFormat:@"PRAGMA table_info(%@)", table];
+            sqlite3_stmt *statement = NULL;
+            if (sqlite3_prepare_v2(database, pragma.UTF8String, -1, &statement, NULL)
+                != SQLITE_OK) {
+                continue;
+            }
+
+            NSMutableArray<NSString *> *columns = [NSMutableArray array];
+            while (sqlite3_step(statement) == SQLITE_ROW) {
+                const unsigned char *nameText = sqlite3_column_text(statement, 1);
+                if (nameText != NULL) {
+                    [columns addObject:
+                        [NSString stringWithUTF8String:(const char *)nameText]];
+                }
+            }
+            sqlite3_finalize(statement);
+            NSLog(@"[CCShortcutLauncher][Resolver] SCHEMA table=%@ columns=%@",
+                  table,
+                  [columns componentsJoinedByString:@","]);
+        }
+    });
+}
+
 /// Automatic refreshes must not leave an error behind: the Settings UI polls
 /// ResolverState after a manual request and would read a stale failure.
 static void CSLReportFailure(BOOL requestedByUser, NSString *message, NSString *reason) {
@@ -132,6 +163,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         return NO;
     }
     sqlite3_busy_timeout(database, 1000);
+    CSLLogIconSchemaOnce(database);
 
     BOOL hasTombstoned = CSLTableHasColumn(database, @"ZSHORTCUT", @"ZTOMBSTONED");
     BOOL hasHiddenFromLibrary = CSLTableHasColumn(
@@ -283,14 +315,11 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
     }];
 
     if (catalog.count == 0) {
+        // An empty catalog is a real state, not a failure: the user may have
+        // deleted every Shortcut. Treating it as an error used to leave the
+        // previous catalog in place, so deleted Shortcuts kept showing up.
         NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_EMPTY skipped=%lu",
               (unsigned long)skippedRows);
-        CSLReportFailure(
-            requestedByUser,
-            @"No valid Shortcuts were found in My Shortcuts.",
-            @"catalog_empty"
-        );
-        return NO;
     }
 
     if (CSLCatalogEqualsStoredCatalog(catalog)) {
@@ -454,7 +483,7 @@ static void CSLPerformInitialLoad(NSUInteger attempt) {
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.2 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.3 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(

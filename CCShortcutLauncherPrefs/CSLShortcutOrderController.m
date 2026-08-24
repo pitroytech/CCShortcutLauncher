@@ -122,7 +122,27 @@
 
 - (void)reloadModel {
     self.catalog = CSLShortcutCatalog();
-    self.selectedIdentifiers = [CSLShortcutIDsForSlot(self.slot) mutableCopy];
+
+    NSArray<NSString *> *stored = CSLShortcutIDsForSlot(self.slot);
+    NSMutableSet<NSString *> *catalogIdentifiers = [NSMutableSet set];
+    for (NSDictionary<NSString *, id> *entry in self.catalog) {
+        [catalogIdentifiers addObject:entry[@"workflowID"]];
+    }
+
+    // Identifiers of deleted Shortcuts have to go. While they stayed in the
+    // list, the rows the table showed and the identifiers behind them ran out
+    // of step, so dragging a row reordered the wrong entry.
+    NSMutableArray<NSString *> *live = [NSMutableArray array];
+    for (NSString *identifier in stored) {
+        if ([catalogIdentifiers containsObject:identifier]) {
+            [live addObject:identifier];
+        }
+    }
+    self.selectedIdentifiers = live;
+    if (live.count != stored.count) {
+        [self saveSelection];
+    }
+
     [self rebuildSections];
     [self.tableView reloadData];
 }
@@ -260,12 +280,23 @@
     moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
            toIndexPath:(NSIndexPath *)destinationIndexPath {
     if (sourceIndexPath.section != 0 || destinationIndexPath.section != 0 ||
-        sourceIndexPath.row == destinationIndexPath.row) {
+        sourceIndexPath.row == destinationIndexPath.row ||
+        (NSUInteger)sourceIndexPath.row >= self.includedEntries.count) {
         return;
     }
-    NSString *identifier = self.selectedIdentifiers[sourceIndexPath.row];
-    [self.selectedIdentifiers removeObjectAtIndex:sourceIndexPath.row];
-    [self.selectedIdentifiers insertObject:identifier atIndex:destinationIndexPath.row];
+
+    // Move by identifier, not by row index, so the order that gets saved is
+    // the order the table is showing.
+    NSString *identifier = self.includedEntries[sourceIndexPath.row][@"workflowID"];
+    NSUInteger currentIndex = [self.selectedIdentifiers indexOfObject:identifier];
+    if (currentIndex == NSNotFound) {
+        return;
+    }
+    [self.selectedIdentifiers removeObjectAtIndex:currentIndex];
+    NSUInteger destination =
+        MIN((NSUInteger)destinationIndexPath.row, self.selectedIdentifiers.count);
+    [self.selectedIdentifiers insertObject:identifier atIndex:destination];
+
     [self saveSelection];
     [self rebuildSections];
 }

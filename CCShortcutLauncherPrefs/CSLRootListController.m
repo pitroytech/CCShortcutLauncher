@@ -6,6 +6,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 
 static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
@@ -46,8 +47,23 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
             [specifiers addObject:specifier];
         }
 
+        PSSpecifier *respringGroup = [PSSpecifier emptyGroupSpecifier];
+        [respringGroup setProperty:@"Changes apply without a respring. Use this only if Control Center does not pick a change up."
+                            forKey:@"footerText"];
+        [specifiers addObject:respringGroup];
+
+        PSSpecifier *respring = [PSSpecifier preferenceSpecifierNamed:@"Respring"
+                                                               target:self
+                                                                  set:NULL
+                                                                  get:NULL
+                                                               detail:Nil
+                                                                 cell:PSButtonCell
+                                                                 edit:Nil];
+        respring->action = @selector(confirmRespring);
+        [specifiers addObject:respring];
+
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.2 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.3 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
@@ -137,6 +153,61 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     }
 }
 
+- (void)confirmRespring {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Respring"
+                         message:@"SpringBoard restarts. Anything you have open is closed."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Respring"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction *action) {
+        [self respring];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+/// Settings cannot spawn sbreload, so ask the render server to restart the way
+/// SpringBoard itself does.
+- (void)respring {
+    Class relaunchActionClass = NSClassFromString(@"SBSRelaunchAction");
+    Class systemServiceClass = NSClassFromString(@"FBSSystemService");
+    if (relaunchActionClass == Nil || systemServiceClass == Nil) {
+        [self showMessageWithTitle:@"Respring Unavailable"
+                           message:@"Restart SpringBoard from your package manager or a terminal instead."];
+        return;
+    }
+
+    @try {
+        id action = ((id (*)(id, SEL, id, NSUInteger, id))objc_msgSend)(
+            relaunchActionClass,
+            NSSelectorFromString(@"actionWithReason:options:targetURL:"),
+            @"RestartRenderServer",
+            4,
+            nil
+        );
+        id service = ((id (*)(id, SEL))objc_msgSend)(
+            systemServiceClass,
+            NSSelectorFromString(@"sharedService")
+        );
+        if (action == nil || service == nil) {
+            return;
+        }
+        ((void (*)(id, SEL, id, id))objc_msgSend)(
+            service,
+            NSSelectorFromString(@"sendActions:withResult:"),
+            [NSSet setWithObject:action],
+            nil
+        );
+    } @catch (NSException *exception) {
+        NSLog(@"[CCShortcutLauncher][Settings] RESPRING_EXCEPTION exception=%@ reason=%@",
+              exception.name,
+              exception.reason);
+    }
+}
+
 - (void)openModuleSlot:(PSSpecifier *)specifier {
     NSUInteger slot = [self slotForSpecifier:specifier];
     CSLShortcutOrderController *controller =
@@ -201,11 +272,14 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
                 ? [(NSArray *)catalogValue count]
                 : 0;
 
-            if ([state isEqualToString:@"catalog_ready"] && count > 0) {
-                [self finishLoadingWithTitle:@"My Shortcuts Loaded"
-                                      message:[NSString stringWithFormat:
-                                          @"Cached %lu Shortcuts. Open a module below to choose which ones it runs.",
-                                          (unsigned long)count]];
+            if ([state isEqualToString:@"catalog_ready"]) {
+                // Zero is a valid result: every Shortcut may have been deleted.
+                NSString *message = count > 0
+                    ? [NSString stringWithFormat:
+                        @"Cached %lu Shortcuts. Open a module below to choose which ones it runs.",
+                        (unsigned long)count]
+                    : @"No Shortcuts were found in My Shortcuts. The modules are now empty.";
+                [self finishLoadingWithTitle:@"My Shortcuts Loaded" message:message];
                 return;
             }
 
