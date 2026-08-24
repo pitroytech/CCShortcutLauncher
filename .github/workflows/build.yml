@@ -40,6 +40,25 @@ jobs:
           cp -r /tmp/sdks/sdks-master/iPhoneOS16.5.sdk "$THEOS/sdks/"
           ls -d "$THEOS"/sdks/iPhoneOS16*.sdk
 
+      - name: Ensure ldid is on PATH
+        run: |
+          set -eu
+          if command -v ldid >/dev/null 2>&1; then
+            echo "ldid already on PATH: $(command -v ldid)"
+            exit 0
+          fi
+          found="$(find "$THEOS" -type f -name 'ldid*' -perm -u+x 2>/dev/null | head -n 1 || true)"
+          if [ -n "$found" ]; then
+            echo "Linking ldid from $found"
+            sudo ln -sf "$found" /usr/local/bin/ldid
+          else
+            echo "Downloading ldid from ProcursusTeam"
+            sudo curl -fsSL -o /usr/local/bin/ldid \
+              https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64
+            sudo chmod +x /usr/local/bin/ldid
+          fi
+          command -v ldid
+
       - name: Verify build environment
         run: |
           chmod +x scripts/check-build-env.sh
