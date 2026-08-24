@@ -1,22 +1,67 @@
 #import "CSLRootListController.h"
 #import "CSLShortcutOrderController.h"
+#import "../CSLSlotPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
+#import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 
 static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
+static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
 
 @implementation CSLRootListController
 
 - (NSArray *)specifiers {
     if (_specifiers == nil) {
-        _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
+        CSLMigrateLegacySelectionIfNeeded();
+
+        NSMutableArray *specifiers =
+            [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
+
+        NSUInteger slotCount = CSLModuleSlotCount();
+        for (NSUInteger slot = 0; slot < slotCount; slot++) {
+            PSSpecifier *specifier =
+                [PSSpecifier preferenceSpecifierNamed:CSLDisplayNameForSlot(slot)
+                                               target:self
+                                                  set:NULL
+                                                  get:NULL
+                                               detail:Nil
+                                                 cell:PSLinkCell
+                                                 edit:Nil];
+            specifier->action = @selector(openModuleSlot:);
+            [specifier setProperty:@(slot) forKey:CSLSlotSpecifierKey];
+            [specifiers addObject:specifier];
+        }
+
+        PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
+        [footer setProperty:@"Version 1.4.0 · Run selected Shortcuts in the background from Control Center."
+                     forKey:@"footerText"];
+        [specifiers addObject:footer];
+
+        _specifiers = [specifiers copy];
     }
 
     return _specifiers;
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // The module count and the module names can both change on the pages this
+    // controller pushes, so the slot rows are rebuilt on every appearance.
+    [self reloadSpecifiers];
+}
+
+- (void)openModuleSlot:(PSSpecifier *)specifier {
+    id slotValue = [specifier propertyForKey:CSLSlotSpecifierKey];
+    NSUInteger slot = [slotValue isKindOfClass:[NSNumber class]]
+        ? [(NSNumber *)slotValue unsignedIntegerValue]
+        : 0;
+    CSLShortcutOrderController *controller =
+        [[CSLShortcutOrderController alloc] initWithSlot:slot];
+    [self.navigationController pushViewController:controller animated:YES];
 }
 
 - (id)preferenceValueForKey:(CFStringRef)key {
@@ -79,7 +124,7 @@ static CFStringRef const CSLCatalogRequestedNotification =
             if ([state isEqualToString:@"catalog_ready"] && count > 0) {
                 [self finishLoadingWithTitle:@"My Shortcuts Loaded"
                                       message:[NSString stringWithFormat:
-                                          @"Loaded %lu Shortcuts. Open Manage Popup Shortcuts to choose and arrange them.",
+                                          @"Cached %lu Shortcuts. Open a module below to choose which ones it runs.",
                                           (unsigned long)count]];
                 return;
             }
@@ -132,12 +177,6 @@ static CFStringRef const CSLCatalogRequestedNotification =
         );
         [self pollCatalogWithGeneration:generation attempt:0];
     });
-}
-
-- (void)managePopupShortcuts {
-    CSLShortcutOrderController *controller =
-        [[CSLShortcutOrderController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    [self.navigationController pushViewController:controller animated:YES];
 }
 
 @end

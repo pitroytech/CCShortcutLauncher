@@ -1,14 +1,12 @@
 #import "CCShortcutLauncher.h"
 #import "CCShortcutLauncherBackgroundRunner.h"
 #import "CSLShortcutIcon.h"
+#import "CSLSlotPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-
-static CFStringRef const CCShortcutLauncherPreferencesDomain =
-    CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 
 static id CSLObjectIvarValue(id object, const char *name) {
     if (object == nil || name == NULL) {
@@ -70,12 +68,38 @@ static void CSLCollectViewControllers(
 
 @implementation CCShortcutLauncher
 
+- (instancetype)initWithSlot:(NSUInteger)slot {
+    self = [super init];
+    if (self != nil) {
+        _slot = slot;
+    }
+    return self;
+}
+
+- (instancetype)init {
+    return [self initWithSlot:0];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)slotEntries {
+    return CSLEntriesForSlot(self.slot);
+}
+
 - (UIImage *)iconGlyph {
+    // A slot holding a single Shortcut shows that Shortcut's own glyph, so two
+    // modules side by side stay distinguishable.
+    NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
+    if (entries.count == 1) {
+        UIImage *glyph =
+            CSLShortcutGlyphTemplateImageForEntry(entries.firstObject, CGSizeMake(24.0, 24.0));
+        if (glyph != nil) {
+            return glyph;
+        }
+    }
     return [UIImage systemImageNamed:@"square.grid.2x2"];
 }
 
 - (UIImage *)selectedIconGlyph {
-    return [UIImage systemImageNamed:@"square.grid.2x2.fill"];
+    return [self iconGlyph];
 }
 
 - (UIColor *)selectedColor {
@@ -93,106 +117,16 @@ static void CSLCollectViewControllers(
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self presentShortcutPopup];
+        NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
+        if (entries.count == 1) {
+            // Nothing to choose from, so skip the popup entirely.
+            NSDictionary<NSString *, id> *entry = entries.firstObject;
+            [self runShortcutNamed:entry[@"name"] workflowID:entry[@"workflowID"]];
+        } else {
+            [self presentShortcutPopup];
+        }
         [self refreshState];
     });
-}
-
-- (id)preferenceObjectForKey:(CFStringRef)key {
-    CFPreferencesAppSynchronize(CCShortcutLauncherPreferencesDomain);
-    CFPropertyListRef value = CFPreferencesCopyAppValue(
-        key,
-        CCShortcutLauncherPreferencesDomain
-    );
-    return value != NULL ? CFBridgingRelease(value) : nil;
-}
-
-- (NSArray<NSDictionary<NSString *, id> *> *)shortcutCatalog {
-    id object = [self preferenceObjectForKey:CFSTR("ShortcutsCatalog")];
-    if (![object isKindOfClass:[NSArray class]]) {
-        return @[];
-    }
-
-    NSMutableArray<NSDictionary<NSString *, id> *> *catalog =
-        [NSMutableArray array];
-    for (id item in (NSArray *)object) {
-        if (![item isKindOfClass:[NSDictionary class]]) {
-            continue;
-        }
-
-        id nameValue = ((NSDictionary *)item)[@"name"];
-        id identifierValue = ((NSDictionary *)item)[@"workflowID"];
-        if (![nameValue isKindOfClass:[NSString class]] ||
-            ![identifierValue isKindOfClass:[NSString class]]) {
-            continue;
-        }
-
-        NSString *shortcutName =
-            [(NSString *)nameValue stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:(NSString *)identifierValue];
-        if (shortcutName.length == 0 || uuid == nil) {
-            continue;
-        }
-
-        NSMutableDictionary<NSString *, id> *entry = [@{
-            @"name": shortcutName,
-            @"workflowID": uuid.UUIDString,
-        } mutableCopy];
-        id glyphValue = ((NSDictionary *)item)[@"iconGlyph"];
-        id colorValue = ((NSDictionary *)item)[@"iconColor"];
-        if ([glyphValue isKindOfClass:[NSNumber class]]) {
-            entry[@"iconGlyph"] = glyphValue;
-        }
-        if ([colorValue isKindOfClass:[NSNumber class]]) {
-            entry[@"iconColor"] = colorValue;
-        }
-        [catalog addObject:entry];
-    }
-
-    [catalog sortUsingComparator:^NSComparisonResult(
-        NSDictionary<NSString *, id> *left,
-        NSDictionary<NSString *, id> *right
-    ) {
-        NSComparisonResult nameResult =
-            [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
-        if (nameResult != NSOrderedSame) {
-            return nameResult;
-        }
-        return [left[@"workflowID"] compare:right[@"workflowID"]];
-    }];
-    return catalog;
-}
-
-- (NSArray<NSDictionary<NSString *, id> *> *)popupCatalogFromCatalog:
-    (NSArray<NSDictionary<NSString *, id> *> *)catalog {
-    id savedValue = [self preferenceObjectForKey:CFSTR("PopupShortcutIDs")];
-    if (![savedValue isKindOfClass:[NSArray class]]) {
-        return catalog;
-    }
-
-    NSMutableDictionary<NSString *, NSDictionary<NSString *, id> *> *byIdentifier =
-        [NSMutableDictionary dictionary];
-    for (NSDictionary<NSString *, id> *entry in catalog) {
-        byIdentifier[entry[@"workflowID"]] = entry;
-    }
-
-    NSMutableArray<NSDictionary<NSString *, id> *> *popupCatalog =
-        [NSMutableArray array];
-    NSMutableSet<NSString *> *seenIdentifiers = [NSMutableSet set];
-    for (id value in (NSArray *)savedValue) {
-        if (![value isKindOfClass:[NSString class]]) {
-            continue;
-        }
-        NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:(NSString *)value];
-        NSString *identifier = uuid.UUIDString;
-        NSDictionary *entry = identifier != nil ? byIdentifier[identifier] : nil;
-        if (entry != nil && ![seenIdentifiers containsObject:identifier]) {
-            [popupCatalog addObject:entry];
-            [seenIdentifiers addObject:identifier];
-        }
-    }
-    return popupCatalog;
 }
 
 - (void)runShortcutNamed:(NSString *)shortcutName
@@ -270,22 +204,19 @@ static void CSLCollectViewControllers(
             return;
         }
 
-        NSArray<NSDictionary<NSString *, id> *> *loadedCatalog =
-            [self shortcutCatalog];
-        NSArray<NSDictionary<NSString *, id> *> *catalog =
-            [self popupCatalogFromCatalog:loadedCatalog];
+        NSArray<NSDictionary<NSString *, id> *> *loadedCatalog = CSLShortcutCatalog();
+        NSArray<NSDictionary<NSString *, id> *> *catalog = [self slotEntries];
         NSString *message = nil;
         if (catalog.count > 0) {
-            message = [NSString stringWithFormat:@"%lu Shortcut%@ included",
-                (unsigned long)catalog.count,
-                catalog.count == 1 ? @"" : @"s"];
+            message = [NSString stringWithFormat:@"%lu Shortcuts included",
+                (unsigned long)catalog.count];
         } else if (loadedCatalog.count > 0) {
-            message = @"Open Settings \u2192 Shortcut Launcher \u2192 Manage Popup Shortcuts.";
+            message = @"Open Settings \u2192 Control Center, tap this module, and add Shortcuts to it.";
         } else {
             message = @"Open Settings \u2192 Shortcut Launcher and tap Load My Shortcuts.";
         }
         UIAlertController *popup = [UIAlertController
-            alertControllerWithTitle:@"My Shortcuts"
+            alertControllerWithTitle:CSLDisplayNameForSlot(self.slot)
                              message:message
                       preferredStyle:UIAlertControllerStyleActionSheet];
 

@@ -1,153 +1,122 @@
 #import "CSLShortcutOrderController.h"
 #import "../CSLShortcutIcon.h"
-
-#import <CoreFoundation/CoreFoundation.h>
-
-static CFStringRef const CSLOrderPreferencesDomain =
-    CFSTR("com.dinhnguyenx.ccshortcutlauncher");
+#import "../CSLSlotPreferences.h"
 
 @interface CSLShortcutOrderController ()
 @property (nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *catalog;
 @property (nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *includedEntries;
 @property (nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *availableEntries;
 @property (nonatomic, strong) NSMutableArray<NSString *> *selectedIdentifiers;
+@property (nonatomic, weak) id psRootController;
+@property (nonatomic, weak) id psParentController;
+@property (nonatomic, strong) id psSpecifier;
 @end
 
 @implementation CSLShortcutOrderController
 
+- (instancetype)initWithSlot:(NSUInteger)slot {
+    self = [super initWithStyle:UITableViewStyleInsetGrouped];
+    if (self != nil) {
+        _slot = slot;
+    }
+    return self;
+}
+
+- (instancetype)initWithStyle:(UITableViewStyle)style {
+    self = [super initWithStyle:style];
+    if (self != nil) {
+        _slot = 0;
+    }
+    return self;
+}
+
+#pragma mark - PSViewController compatibility
+
+// CCSupport pushes this controller from Settings → Control Center through the
+// Preferences machinery, which sets these on any pushed controller.
+
+- (void)setRootController:(id)controller {
+    self.psRootController = controller;
+}
+
+- (id)rootController {
+    return self.psRootController;
+}
+
+- (void)setParentController:(id)controller {
+    self.psParentController = controller;
+}
+
+- (id)parentController {
+    return self.psParentController;
+}
+
+- (void)setSpecifier:(id)specifier {
+    self.psSpecifier = specifier;
+}
+
+- (id)specifier {
+    return self.psSpecifier;
+}
+
+#pragma mark - Lifecycle
+
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Popup Shortcuts";
     self.tableView.allowsSelectionDuringEditing = NO;
     self.tableView.rowHeight = 58.0;
     [self setEditing:YES animated:NO];
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"Rename"
+                                         style:UIBarButtonItemStylePlain
+                                        target:self
+                                        action:@selector(renameModule)];
+    [self updateTitle];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    CSLMigrateLegacySelectionIfNeeded();
+    [self updateTitle];
     [self reloadModel];
 }
 
-- (id)preferenceValueForKey:(CFStringRef)key {
-    CFPreferencesAppSynchronize(CSLOrderPreferencesDomain);
-    CFPropertyListRef value = CFPreferencesCopyAppValue(key, CSLOrderPreferencesDomain);
-    return value != NULL ? CFBridgingRelease(value) : nil;
+- (void)updateTitle {
+    self.title = CSLDisplayNameForSlot(self.slot);
 }
 
-- (NSArray<NSDictionary<NSString *, id> *> *)validatedCatalogFromValue:(id)value {
-    if (![value isKindOfClass:[NSArray class]]) {
-        return @[];
-    }
+- (void)renameModule {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Rename Module"
+                         message:@"This name is shown in Settings → Control Center and on the popup."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = CSLSlotName(self.slot);
+        textField.placeholder = CSLDisplayNameForSlot(self.slot);
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
 
-    NSMutableArray<NSDictionary<NSString *, id> *> *catalog =
-        [NSMutableArray array];
-    NSMutableSet<NSString *> *seenIdentifiers = [NSMutableSet set];
-    for (id item in (NSArray *)value) {
-        if (![item isKindOfClass:[NSDictionary class]]) {
-            continue;
-        }
-        id nameValue = ((NSDictionary *)item)[@"name"];
-        id identifierValue = ((NSDictionary *)item)[@"workflowID"];
-        if (![nameValue isKindOfClass:[NSString class]] ||
-            ![identifierValue isKindOfClass:[NSString class]]) {
-            continue;
-        }
-
-        NSString *name = [(NSString *)nameValue stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:(NSString *)identifierValue];
-        if (name.length == 0 || uuid == nil ||
-            [seenIdentifiers containsObject:uuid.UUIDString]) {
-            continue;
-        }
-        [seenIdentifiers addObject:uuid.UUIDString];
-        NSMutableDictionary<NSString *, id> *entry = [@{
-            @"name": name,
-            @"workflowID": uuid.UUIDString,
-        } mutableCopy];
-        id glyphValue = ((NSDictionary *)item)[@"iconGlyph"];
-        id colorValue = ((NSDictionary *)item)[@"iconColor"];
-        if ([glyphValue isKindOfClass:[NSNumber class]]) {
-            entry[@"iconGlyph"] = glyphValue;
-        }
-        if ([colorValue isKindOfClass:[NSNumber class]]) {
-            entry[@"iconColor"] = colorValue;
-        }
-        [catalog addObject:entry];
-    }
-    return catalog;
+    __weak typeof(self) weakSelf = self;
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+        CSLSetSlotName(weakAlert.textFields.firstObject.text, weakSelf.slot);
+        [weakSelf updateTitle];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
+
+#pragma mark - Model
 
 - (void)reloadModel {
-    self.catalog = [self validatedCatalogFromValue:
-        [self preferenceValueForKey:CFSTR("ShortcutsCatalog")]];
-
-    NSMutableDictionary<NSString *, NSDictionary<NSString *, id> *> *byIdentifier =
-        [NSMutableDictionary dictionary];
-    for (NSDictionary<NSString *, id> *entry in self.catalog) {
-        byIdentifier[entry[@"workflowID"]] = entry;
-    }
-
-    id savedValue = [self preferenceValueForKey:CFSTR("PopupShortcutIDs")];
-    BOOL hasSavedSelection = [savedValue isKindOfClass:[NSArray class]];
-    NSArray *savedIdentifiers = hasSavedSelection ? savedValue : @[];
-    NSMutableArray<NSString *> *selected = [NSMutableArray array];
-    NSMutableSet<NSString *> *selectedSet = [NSMutableSet set];
-
-    if (hasSavedSelection) {
-        for (id value in savedIdentifiers) {
-            if (![value isKindOfClass:[NSString class]]) {
-                continue;
-            }
-            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:(NSString *)value];
-            NSString *identifier = uuid.UUIDString;
-            if (identifier != nil && byIdentifier[identifier] != nil &&
-                ![selectedSet containsObject:identifier]) {
-                [selected addObject:identifier];
-                [selectedSet addObject:identifier];
-            }
-        }
-    } else {
-        for (NSDictionary<NSString *, id> *entry in self.catalog) {
-            NSString *identifier = entry[@"workflowID"];
-            [selected addObject:identifier];
-            [selectedSet addObject:identifier];
-        }
-    }
-    self.selectedIdentifiers = selected;
-
-    NSMutableArray<NSDictionary<NSString *, id> *> *included =
-        [NSMutableArray array];
-    for (NSString *identifier in selected) {
-        NSDictionary *entry = byIdentifier[identifier];
-        if (entry != nil) {
-            [included addObject:entry];
-        }
-    }
-    self.includedEntries = included;
-
-    NSMutableArray<NSDictionary<NSString *, id> *> *available =
-        [NSMutableArray array];
-    for (NSDictionary<NSString *, id> *entry in self.catalog) {
-        if (![selectedSet containsObject:entry[@"workflowID"]]) {
-            [available addObject:entry];
-        }
-    }
-    [available sortUsingComparator:^NSComparisonResult(
-        NSDictionary<NSString *, id> *left,
-        NSDictionary<NSString *, id> *right
-    ) {
-        NSComparisonResult nameResult =
-            [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
-        return nameResult != NSOrderedSame
-            ? nameResult
-            : [left[@"workflowID"] compare:right[@"workflowID"]];
-    }];
-    self.availableEntries = available;
-
-    if (!hasSavedSelection || ![savedIdentifiers isEqualToArray:selected]) {
-        [self saveSelection];
-    }
+    self.catalog = CSLShortcutCatalog();
+    self.selectedIdentifiers = [CSLShortcutIDsForSlot(self.slot) mutableCopy];
+    [self rebuildSections];
     [self.tableView reloadData];
 }
 
@@ -158,44 +127,31 @@ static CFStringRef const CSLOrderPreferencesDomain =
         byIdentifier[entry[@"workflowID"]] = entry;
     }
 
-    NSMutableArray *included = [NSMutableArray array];
-    NSMutableSet *selectedSet = [NSMutableSet setWithArray:self.selectedIdentifiers];
+    NSMutableArray<NSDictionary<NSString *, id> *> *included = [NSMutableArray array];
+    NSMutableSet<NSString *> *selectedSet =
+        [NSMutableSet setWithArray:self.selectedIdentifiers];
     for (NSString *identifier in self.selectedIdentifiers) {
-        NSDictionary *entry = byIdentifier[identifier];
+        NSDictionary<NSString *, id> *entry = byIdentifier[identifier];
         if (entry != nil) {
             [included addObject:entry];
         }
     }
     self.includedEntries = included;
 
-    NSMutableArray *available = [NSMutableArray array];
-    for (NSDictionary *entry in self.catalog) {
+    NSMutableArray<NSDictionary<NSString *, id> *> *available = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *entry in self.catalog) {
         if (![selectedSet containsObject:entry[@"workflowID"]]) {
             [available addObject:entry];
         }
     }
-    [available sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
-        NSComparisonResult result =
-            [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
-        return result != NSOrderedSame
-            ? result
-            : [left[@"workflowID"] compare:right[@"workflowID"]];
-    }];
     self.availableEntries = available;
 }
 
 - (void)saveSelection {
-    CFPreferencesSetAppValue(
-        CFSTR("PopupShortcutIDs"),
-        (__bridge CFArrayRef)self.selectedIdentifiers,
-        CSLOrderPreferencesDomain
-    );
-    BOOL synchronized = CFPreferencesAppSynchronize(CSLOrderPreferencesDomain);
-    if (!synchronized) {
-        NSLog(@"[CCShortcutLauncher][Settings] POPUP_SELECTION_SAVE_FAILED count=%lu",
-              (unsigned long)self.selectedIdentifiers.count);
-    }
+    CSLSetShortcutIDs(self.selectedIdentifiers, self.slot);
 }
+
+#pragma mark - Table view
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
     return 2;
@@ -206,18 +162,21 @@ static CFStringRef const CSLOrderPreferencesDomain =
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section == 0 ? @"INCLUDED IN POPUP" : @"MORE SHORTCUTS";
+    return section == 0 ? @"IN THIS MODULE" : @"MORE SHORTCUTS";
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 0 && self.includedEntries.count == 0) {
-        return @"Add at least one Shortcut below to show it in the Control Center popup.";
+        return @"Add at least one Shortcut below. Nothing is added automatically.";
+    }
+    if (section == 0 && self.includedEntries.count == 1) {
+        return @"With one Shortcut the module runs it straight away, without a popup, and shows its icon in Control Center.";
     }
     if (section == 1 && self.catalog.count == 0) {
         return @"Return to Shortcut Launcher and tap Load My Shortcuts first.";
     }
     if (section == 1 && self.availableEntries.count == 0) {
-        return @"All loaded Shortcuts are included in the popup.";
+        return @"All loaded Shortcuts are already in this module.";
     }
     return nil;
 }

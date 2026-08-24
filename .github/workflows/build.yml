@@ -1,0 +1,71 @@
+name: Build rootless deb
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (Theos, rootless)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl fakeroot git perl unzip zip xz-utils
+
+      - name: Set up Theos
+        uses: Randomblock1/theos-action@v1
+
+      - name: Ensure iPhoneOS 16.5 SDK is present
+        run: |
+          set -eu
+          if ls "$THEOS"/sdks/iPhoneOS16*.sdk >/dev/null 2>&1; then
+            echo "SDK already present:"
+            ls -d "$THEOS"/sdks/iPhoneOS16*.sdk
+            exit 0
+          fi
+          echo "No iPhoneOS 16.x SDK found, fetching from theos/sdks"
+          mkdir -p "$THEOS/sdks"
+          curl -fsSL https://github.com/theos/sdks/archive/refs/heads/master.zip -o /tmp/sdks.zip
+          unzip -q /tmp/sdks.zip -d /tmp/sdks
+          cp -r /tmp/sdks/sdks-master/iPhoneOS16.5.sdk "$THEOS/sdks/"
+          ls -d "$THEOS"/sdks/iPhoneOS16*.sdk
+
+      - name: Verify build environment
+        run: |
+          chmod +x scripts/check-build-env.sh
+          ./scripts/check-build-env.sh
+
+      - name: Build package
+        run: make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Inspect produced package
+        run: |
+          set -eu
+          deb="$(ls packages/*.deb | head -n 1)"
+          echo "Package: $deb"
+          dpkg-deb -I "$deb"
+          echo "--- contents ---"
+          dpkg-deb -c "$deb"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccshortcutlauncher-rootless-deb
+          path: packages/*.deb
+          if-no-files-found: error
+
+      - name: Attach package to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*.deb

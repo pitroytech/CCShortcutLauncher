@@ -1,8 +1,8 @@
 Package: com.dinhnguyenx.ccshortcutlauncher
 Name: CCShortcutLauncher
-Version: 1.3.0
+Version: 1.4.0
 Architecture: iphoneos-arm64
-Description: Manage, order, and run cached My Shortcuts with their icons from a Control Center popup on iOS 16.
+Description: Run cached My Shortcuts in the background from one or more Control Center modules on iOS 16.
 Maintainer: dinhnguyenx
 Author: dinhnguyenx
 Section: Control Center (Modules)

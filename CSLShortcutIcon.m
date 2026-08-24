@@ -334,8 +334,8 @@ static UIColor *CSLShortcutColorFromValue(id value) {
     return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
 }
 
-static void CSLDrawFallbackGlyph(CGRect bounds) {
-    CGFloat pointSize = MIN(CGRectGetWidth(bounds), CGRectGetHeight(bounds)) * 0.54;
+static void CSLDrawFallbackGlyphWithRatio(CGRect bounds, CGFloat fillRatio) {
+    CGFloat pointSize = MIN(CGRectGetWidth(bounds), CGRectGetHeight(bounds)) * fillRatio;
     UIImageSymbolConfiguration *configuration =
         [UIImageSymbolConfiguration configurationWithPointSize:pointSize
                                                         weight:UIImageSymbolWeightSemibold];
@@ -357,10 +357,15 @@ static void CSLDrawFallbackGlyph(CGRect bounds) {
     [glyph drawInRect:glyphRect];
 }
 
-static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
-                                 CGRect bounds,
-                                 NSString *fontName,
-                                 uint32_t glyphNumber) {
+static void CSLDrawFallbackGlyph(CGRect bounds) {
+    CSLDrawFallbackGlyphWithRatio(bounds, 0.54);
+}
+
+static BOOL CSLDrawWorkflowGlyphWithRatio(CGContextRef context,
+                                          CGRect bounds,
+                                          NSString *fontName,
+                                          uint32_t glyphNumber,
+                                          CGFloat fillRatio) {
     if (context == NULL || fontName.length == 0 ||
         glyphNumber == 0 || glyphNumber > UINT16_MAX) {
         return NO;
@@ -402,7 +407,7 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     CGFloat targetDimension = MIN(
         CGRectGetWidth(bounds),
         CGRectGetHeight(bounds)
-    ) * 0.58;
+    ) * fillRatio;
     CGFloat scale = targetDimension / maximumDimension;
 
     CGContextSaveGState(context);
@@ -423,6 +428,44 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     CGContextRestoreGState(context);
     CGPathRelease(glyphPath);
     return YES;
+}
+
+static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
+                                 CGRect bounds,
+                                 NSString *fontName,
+                                 uint32_t glyphNumber) {
+    return CSLDrawWorkflowGlyphWithRatio(context, bounds, fontName, glyphNumber, 0.58);
+}
+
+UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *entry,
+                                               CGSize size) {
+    if (size.width <= 0.0 || size.height <= 0.0) {
+        return [UIImage new];
+    }
+
+    NSNumber *glyphValue = [entry[@"iconGlyph"] isKindOfClass:[NSNumber class]]
+        ? entry[@"iconGlyph"]
+        : nil;
+    uint32_t glyphNumber = glyphValue.unsignedIntValue;
+    NSString *fontName = glyphNumber > 0 && glyphNumber <= UINT16_MAX
+        ? CSLWorkflowGlyphFontName()
+        : nil;
+    if (fontName.length == 0) {
+        return nil;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+    BOOL drawn = CSLDrawWorkflowGlyphWithRatio(
+        UIGraphicsGetCurrentContext(),
+        bounds,
+        fontName,
+        glyphNumber,
+        0.86
+    );
+    UIImage *image = drawn ? UIGraphicsGetImageFromCurrentImageContext() : nil;
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
 UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
