@@ -468,6 +468,74 @@ UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *ent
     return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
+/// Shortcuts an app donates through "Add to Siri" carry no glyph; the Shortcuts
+/// app draws the app's own icon in their place.
+static UIImage *CSLApplicationIconImage(NSString *bundleIdentifier) {
+    if (bundleIdentifier.length == 0) {
+        return nil;
+    }
+
+    SEL selector =
+        NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if (![UIImage respondsToSelector:selector]) {
+        return nil;
+    }
+
+    @try {
+        return ((UIImage *(*)(id, SEL, NSString *, int, CGFloat))objc_msgSend)(
+            [UIImage class],
+            selector,
+            bundleIdentifier,
+            2,
+            UIScreen.mainScreen.scale
+        );
+    } @catch (NSException *exception) {
+        NSLog(@"[CCShortcutLauncher][Icon] APP_ICON_EXCEPTION bundle=%@ exception=%@",
+              bundleIdentifier,
+              exception.name);
+        return nil;
+    }
+}
+
+/// Draws the app icon on the Shortcut's own coloured tile, the way the
+/// Shortcuts app presents a donated Shortcut.
+static UIImage *CSLApplicationTileImage(NSDictionary<NSString *, id> *entry,
+                                        CGSize size) {
+    id bundleValue = entry[@"appBundleID"];
+    if (![bundleValue isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+    UIImage *appIcon = CSLApplicationIconImage((NSString *)bundleValue);
+    if (appIcon == nil) {
+        return nil;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+    CGFloat cornerRadius = MIN(size.width, size.height) * 0.22;
+    [[UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:cornerRadius] addClip];
+    [CSLShortcutColorFromValue(entry[@"iconColor"]) setFill];
+    UIRectFill(bounds);
+
+    CGFloat side = MIN(size.width, size.height) * 0.62;
+    CGRect iconRect = CGRectMake(
+        CGRectGetMidX(bounds) - side / 2.0,
+        CGRectGetMidY(bounds) - side / 2.0,
+        side,
+        side
+    );
+    UIBezierPath *iconMask =
+        [UIBezierPath bezierPathWithRoundedRect:iconRect cornerRadius:side * 0.23];
+    CGContextSaveGState(UIGraphicsGetCurrentContext());
+    [iconMask addClip];
+    [appIcon drawInRect:iconRect];
+    CGContextRestoreGState(UIGraphicsGetCurrentContext());
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
 UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
                                       CGSize size) {
     if (size.width <= 0.0 || size.height <= 0.0) {
@@ -478,6 +546,15 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
         ? entry[@"iconGlyph"]
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
+
+    // Only when there is no glyph, so Shortcuts the user drew an icon for keep
+    // the icon they chose.
+    if (glyphNumber == 0) {
+        UIImage *applicationTile = CSLApplicationTileImage(entry, size);
+        if (applicationTile != nil) {
+            return applicationTile;
+        }
+    }
     NSNumber *colorValue = [entry[@"iconColor"] isKindOfClass:[NSNumber class]]
         ? entry[@"iconColor"]
         : nil;

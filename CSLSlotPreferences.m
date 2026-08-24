@@ -201,6 +201,11 @@ NSArray<NSDictionary<NSString *, id> *> *CSLShortcutCatalog(void) {
         if ([colorValue isKindOfClass:[NSNumber class]]) {
             entry[@"iconColor"] = colorValue;
         }
+        id appValue = ((NSDictionary *)item)[@"appBundleID"];
+        if ([appValue isKindOfClass:[NSString class]] &&
+            [(NSString *)appValue length] > 0) {
+            entry[@"appBundleID"] = appValue;
+        }
         [catalog addObject:entry];
     }
 

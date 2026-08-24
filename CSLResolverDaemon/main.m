@@ -81,9 +81,52 @@ static BOOL CSLTableHasColumn(sqlite3 *database, NSString *table, NSString *colu
     return found;
 }
 
-/// Shortcuts can show an app's own icon instead of a glyph, and that icon is
-/// not in ZGLYPHNUMBER. Log the column names once so the storage can be found
-/// without guessing at the schema.
+/// Shortcuts an app donates through "Add to Siri" wear the app's icon instead
+/// of a glyph, and the app is named in a column whose name moves between iOS
+/// versions. Find it by shape rather than hardcoding one name.
+static NSString *CSLAssociatedAppColumn(sqlite3 *database) {
+    sqlite3_stmt *statement = NULL;
+    if (sqlite3_prepare_v2(database, "PRAGMA table_info(ZSHORTCUT)", -1, &statement, NULL)
+        != SQLITE_OK) {
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *columns = [NSMutableArray array];
+    while (sqlite3_step(statement) == SQLITE_ROW) {
+        const unsigned char *nameText = sqlite3_column_text(statement, 1);
+        if (nameText != NULL) {
+            [columns addObject:
+                [[NSString stringWithUTF8String:(const char *)nameText] uppercaseString]];
+        }
+    }
+    sqlite3_finalize(statement);
+
+    // Most specific first: a column naming the associated app beats a column
+    // that merely happens to hold some bundle identifier.
+    NSArray<NSArray<NSString *> *> *patterns = @[
+        @[@"ASSOCIATEDAPP", @"BUNDLE"],
+        @[@"APPBUNDLE"],
+        @[@"BUNDLEIDENTIFIER"],
+        @[@"BUNDLEID"],
+    ];
+    for (NSArray<NSString *> *pattern in patterns) {
+        for (NSString *column in columns) {
+            BOOL matches = YES;
+            for (NSString *fragment in pattern) {
+                if ([column rangeOfString:fragment].location == NSNotFound) {
+                    matches = NO;
+                    break;
+                }
+            }
+            if (matches) {
+                return column;
+            }
+        }
+    }
+    return nil;
+}
+
+/// Logs the column names once so a schema change is visible in the log.
 static void CSLLogIconSchemaOnce(sqlite3 *database) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -189,11 +232,16 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
     NSString *colorSelection = canJoinIcon && hasIconColor
         ? @"icon.ZBACKGROUNDCOLORVALUE"
         : @"NULL";
+    NSString *appColumn = CSLAssociatedAppColumn(database);
+    NSString *appSelection = appColumn != nil
+        ? [NSString stringWithFormat:@"shortcut.%@", appColumn]
+        : @"NULL";
     NSMutableString *query = [NSMutableString stringWithFormat:
-        @"SELECT shortcut.ZWORKFLOWID, shortcut.ZNAME, %@, %@ "
+        @"SELECT shortcut.ZWORKFLOWID, shortcut.ZNAME, %@, %@, %@ "
          "FROM ZSHORTCUT AS shortcut ",
         glyphSelection,
-        colorSelection];
+        colorSelection,
+        appSelection];
     if (canJoinIcon) {
         [query appendString:
             @"LEFT JOIN ZSHORTCUTICON AS icon ON shortcut.ZICON = icon.Z_PK "];
@@ -231,6 +279,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
     NSUInteger skippedRows = 0;
     NSUInteger iconMetadataRows = 0;
     NSUInteger completeIconRows = 0;
+    NSUInteger appIconRows = 0;
 
     while ((result = sqlite3_step(statement)) == SQLITE_ROW) {
         const unsigned char *identifierText = sqlite3_column_text(statement, 0);
@@ -275,6 +324,17 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         if (hasColorValue) {
             sqlite3_int64 rawColor = sqlite3_column_int64(statement, 3);
             entry[@"iconColor"] = @((uint32_t)rawColor);
+        }
+        const unsigned char *appText = sqlite3_column_text(statement, 4);
+        if (appText != NULL) {
+            NSString *bundleIdentifier =
+                [[NSString stringWithUTF8String:(const char *)appText]
+                    stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (bundleIdentifier.length > 0) {
+                entry[@"appBundleID"] = bundleIdentifier;
+                appIconRows++;
+            }
         }
         if (hasGlyphValue || hasColorValue) {
             iconMetadataRows++;
@@ -341,11 +401,13 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         CSLPreferencesDomain
     );
     BOOL synchronized = CSLPublishResolverState(@"catalog_ready", nil);
-    NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_LOADED count=%lu skipped=%lu icons=%lu completeIcons=%lu synchronized=%d",
+    NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_LOADED count=%lu skipped=%lu icons=%lu completeIcons=%lu appIcons=%lu appColumn=%@ synchronized=%d",
           (unsigned long)catalog.count,
           (unsigned long)skippedRows,
           (unsigned long)iconMetadataRows,
           (unsigned long)completeIconRows,
+          (unsigned long)appIconRows,
+          appColumn ?: @"none",
           synchronized);
     return YES;
 }
@@ -483,7 +545,7 @@ static void CSLPerformInitialLoad(NSUInteger attempt) {
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.3 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.4 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(
