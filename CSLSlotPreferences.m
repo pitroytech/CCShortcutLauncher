@@ -18,6 +18,11 @@ static CFStringRef const CSLSlotNamesKey = CFSTR("SlotNames");
 static CFStringRef const CSLLegacyShortcutIDsKey = CFSTR("PopupShortcutIDs");
 static CFStringRef const CSLShortcutsCatalogKey = CFSTR("ShortcutsCatalog");
 
+/// Handled by CCSupport in SpringBoard: reloads providers and refreshes the
+/// metadata of every module.
+static CFStringRef const CSLControlCenterReloadProvidersNotification =
+    CFSTR("com.opa334.ccsupport/ReloadProviders");
+
 static id CSLPreferenceValue(CFStringRef key) {
     CFPreferencesAppSynchronize(CSLPreferencesDomain);
     CFPropertyListRef value = CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
@@ -82,6 +87,7 @@ NSUInteger CSLModuleSlotCount(void) {
 void CSLSetModuleSlotCount(NSUInteger count) {
     NSUInteger clamped = MIN(MAX(count, CSLMinimumModuleSlotCount), CSLMaximumModuleSlotCount);
     CSLSetPreferenceValue(CSLModuleSlotCountKey, @(clamped));
+    CSLRequestControlCenterModuleReload();
 }
 
 NSString *CSLModuleIdentifierForSlot(NSUInteger slot) {
@@ -141,6 +147,7 @@ void CSLSetSlotName(NSString *name, NSUInteger slot) {
         [updated removeObjectForKey:CSLSlotStorageKey(slot)];
     }
     CSLSetPreferenceValue(CSLSlotNamesKey, [updated copy]);
+    CSLRequestControlCenterModuleReload();
 }
 
 NSString *CSLDisplayNameForSlot(NSUInteger slot) {
@@ -262,4 +269,14 @@ void CSLMigrateLegacySelectionIfNeeded(void) {
     CSLSetPreferenceValue(CSLLegacyShortcutIDsKey, nil);
     NSLog(@"[CCShortcutLauncher][Prefs] LEGACY_SELECTION_MIGRATED count=%lu",
           (unsigned long)legacy.count);
+}
+
+void CSLRequestControlCenterModuleReload(void) {
+    CFNotificationCenterPostNotification(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        CSLControlCenterReloadProvidersNotification,
+        NULL,
+        NULL,
+        true
+    );
 }

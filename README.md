@@ -94,7 +94,7 @@ Post-install script tự load resolver daemon. Sau đó:
 
 1. Vào **Settings → Shortcut Launcher**.
 2. Bấm **Load My Shortcuts** và ghi lại số lượng báo về.
-3. Chỉnh **Number of Modules** nếu muốn khác 2, rồi `sbreload`.
+3. Chỉnh **Number of Modules** nếu muốn khác 2.
 4. Vào **Settings → Control Center** và thêm các module **Shortcut Launcher**.
 5. Tap từng module trong danh sách đó để chọn Shortcut, đổi thứ tự, đổi tên.
 6. Mở Control Center rồi tap module. Module nhiều Shortcut hiện popup đúng thứ
@@ -123,9 +123,12 @@ idevicesyslog -m '[CCShortcutLauncher]' --no-colors
 - Catalog lọc `ZTOMBSTONED` và `ZHIDDENFROMLIBRARYANDSYNC` khi schema hỗ trợ.
 - Cấu hình lưu UUID theo thứ tự cho từng module; Shortcut mới tải thêm không tự
   chen vào danh sách đã chọn.
-- Đổi số lượng module cần respring: CCSupport chỉ hỏi provider một lần mỗi
-  process. Bản cũ nâng cấp lên giữ nguyên module đã đặt trong Control Center vì
-  module đầu tiên dùng lại identifier cũ.
+- CCSupport chỉ hỏi provider một lần mỗi process, nên SpringBoard có thể giữ
+  danh sách module cũ. Tweak bắn `com.opa334.ccsupport/ReloadProviders` khi mở
+  Settings và khi đổi cấu hình để SpringBoard nạp lại, không cần respring. Nếu
+  module vẫn không hiện thì respring.
+- Bản cũ nâng cấp lên giữ nguyên module đã đặt trong Control Center vì module
+  đầu tiên dùng lại identifier cũ.
 - Bản 1.3.x không chọn gì thì mặc định popup hiện toàn bộ Shortcut. Từ 1.4.0
   mặc định là rỗng; lựa chọn cũ đã lưu sẽ được chuyển vào module đầu tiên.
 - Popup chưa có thanh tìm kiếm; danh sách dài dùng khả năng cuộn của action sheet.

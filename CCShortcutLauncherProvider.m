@@ -8,6 +8,25 @@
 
 @implementation CCShortcutLauncherProvider
 
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            // Settings creates a provider whenever it builds the Control Center
+            // module list. SpringBoard, meanwhile, still holds the module list
+            // it cached at launch, so a module added right after would need a
+            // respring. Nudge SpringBoard to re-read providers instead.
+            BOOL isSpringBoard = [NSBundle.mainBundle.bundleIdentifier
+                isEqualToString:@"com.apple.springboard"];
+            if (!isSpringBoard) {
+                CSLRequestControlCenterModuleReload();
+            }
+        });
+    }
+    return self;
+}
+
 /// The preference bundle owns the slot editor. Its path is derived from this
 /// bundle so the code stays correct on both rootless and rootful prefixes.
 - (NSBundle *)preferenceBundle {

@@ -26,7 +26,7 @@
 			<key>label</key>
 			<string>CONTROL CENTER MODULES</string>
 			<key>footerText</key>
-			<string>Each module holds its own list of Shortcuts. Respring after changing the number, then add the modules in Settings → Control Center.</string>
+			<string>Each module holds its own list of Shortcuts. Add them in Settings → Control Center. Respring only if a module does not show up there.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -41,6 +41,8 @@
 			<integer>2</integer>
 			<key>detail</key>
 			<string>PSListItemsController</string>
+			<key>PostNotification</key>
+			<string>com.opa334.ccsupport/ReloadProviders</string>
 			<key>validValues</key>
 			<array>
 				<integer>1</integer>

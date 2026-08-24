@@ -44,4 +44,9 @@ NSArray<NSDictionary<NSString *, id> *> *CSLEntriesForSlot(NSUInteger slot);
 /// once; call it from Settings only, never from SpringBoard.
 void CSLMigrateLegacySelectionIfNeeded(void);
 
+/// SpringBoard caches the provided module list once per process, so a module
+/// added in Settings stays unusable until a respring. This asks CCSupport to
+/// re-read providers and refresh module metadata instead.
+void CSLRequestControlCenterModuleReload(void);
+
 NS_ASSUME_NONNULL_END

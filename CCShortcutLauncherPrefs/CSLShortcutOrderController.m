@@ -81,6 +81,13 @@
     [self reloadModel];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    // The module glyph and name follow the slot contents, so refresh Control
+    // Center once, on the way out, instead of on every row tap.
+    CSLRequestControlCenterModuleReload();
+}
+
 - (void)updateTitle {
     self.title = CSLDisplayNameForSlot(self.slot);
 }
