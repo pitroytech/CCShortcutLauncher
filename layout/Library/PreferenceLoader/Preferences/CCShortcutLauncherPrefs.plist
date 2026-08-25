@@ -13,7 +13,7 @@
 		<key>isController</key>
 		<true/>
 		<key>label</key>
-		<string>Shortcut Launcher</string>
+		<string>CCShortcutLauncher</string>
 	</dict>
 </dict>
 </plist>

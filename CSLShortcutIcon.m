@@ -334,8 +334,8 @@ static UIColor *CSLShortcutColorFromValue(id value) {
     return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
 }
 
-static void CSLDrawFallbackGlyph(CGRect bounds) {
-    CGFloat pointSize = MIN(CGRectGetWidth(bounds), CGRectGetHeight(bounds)) * 0.54;
+static void CSLDrawFallbackGlyphWithRatio(CGRect bounds, CGFloat fillRatio) {
+    CGFloat pointSize = MIN(CGRectGetWidth(bounds), CGRectGetHeight(bounds)) * fillRatio;
     UIImageSymbolConfiguration *configuration =
         [UIImageSymbolConfiguration configurationWithPointSize:pointSize
                                                         weight:UIImageSymbolWeightSemibold];
@@ -357,10 +357,15 @@ static void CSLDrawFallbackGlyph(CGRect bounds) {
     [glyph drawInRect:glyphRect];
 }
 
-static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
-                                 CGRect bounds,
-                                 NSString *fontName,
-                                 uint32_t glyphNumber) {
+static void CSLDrawFallbackGlyph(CGRect bounds) {
+    CSLDrawFallbackGlyphWithRatio(bounds, 0.54);
+}
+
+static BOOL CSLDrawWorkflowGlyphWithRatio(CGContextRef context,
+                                          CGRect bounds,
+                                          NSString *fontName,
+                                          uint32_t glyphNumber,
+                                          CGFloat fillRatio) {
     if (context == NULL || fontName.length == 0 ||
         glyphNumber == 0 || glyphNumber > UINT16_MAX) {
         return NO;
@@ -402,7 +407,7 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     CGFloat targetDimension = MIN(
         CGRectGetWidth(bounds),
         CGRectGetHeight(bounds)
-    ) * 0.58;
+    ) * fillRatio;
     CGFloat scale = targetDimension / maximumDimension;
 
     CGContextSaveGState(context);
@@ -425,6 +430,231 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     return YES;
 }
 
+static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
+                                 CGRect bounds,
+                                 NSString *fontName,
+                                 uint32_t glyphNumber) {
+    return CSLDrawWorkflowGlyphWithRatio(context, bounds, fontName, glyphNumber, 0.58);
+}
+
+/// Control Center tints module glyphs, so the colourful tile Apple's renderer
+/// produces cannot be handed over as it is. Rendering that tile on black and
+/// keeping its luminance as the alpha channel recovers just the glyph shape,
+/// which is what a template image needs. This reaches every glyph the
+/// Shortcuts app can draw, including ones the glyph font does not carry.
+static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
+    UIImage *rendered = CSLAppleWorkflowIconImage(@(0x000000FF), glyphNumber, size);
+    CGImageRef source = rendered.CGImage;
+    if (source == NULL) {
+        return nil;
+    }
+
+    size_t width = CGImageGetWidth(source);
+    size_t height = CGImageGetHeight(source);
+    if (width == 0 || height == 0) {
+        return nil;
+    }
+
+    size_t pixelCount = width * height;
+    uint8_t *pixels = calloc(pixelCount, 4);
+    if (pixels == NULL) {
+        return nil;
+    }
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        pixels,
+        width,
+        height,
+        8,
+        width * 4,
+        colorSpace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+    );
+    CGColorSpaceRelease(colorSpace);
+    if (context == NULL) {
+        free(pixels);
+        return nil;
+    }
+
+    CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), source);
+
+    // The renderer ignores the colour asked for closely enough that the tile
+    // is never plain black, so treating darkness as transparency kept the tile
+    // itself and drew a grey square around every glyph. Sample the tile colour
+    // instead and keep only what differs from it, which is the glyph.
+    size_t sampleIndex = (((height / 8) * width) + (width / 2)) * 4;
+    uint8_t backgroundR = pixels[sampleIndex];
+    uint8_t backgroundG = pixels[sampleIndex + 1];
+    uint8_t backgroundB = pixels[sampleIndex + 2];
+
+    // White premultiplied by an alpha of a is (a, a, a, a), so writing the
+    // coverage into all four channels keeps the buffer valid. The bounds of
+    // the drawn pixels are tracked so the padding Apple leaves around the
+    // glyph can be cropped away; without that the module reads far smaller
+    // than the system glyphs beside it.
+    size_t minX = width, maxX = 0, minY = height, maxY = 0;
+    for (size_t y = 0; y < height; y++) {
+        for (size_t x = 0; x < width; x++) {
+            uint8_t *pixel = &pixels[(y * width + x) * 4];
+
+            // Outside the rounded tile the pixels are transparent, and their
+            // premultiplied zero would otherwise read as a large difference.
+            int coverage = 0;
+            if (pixel[3] > 200) {
+                int deltaR = abs((int)pixel[0] - (int)backgroundR);
+                int deltaG = abs((int)pixel[1] - (int)backgroundG);
+                int deltaB = abs((int)pixel[2] - (int)backgroundB);
+                coverage = MAX(MAX(deltaR, deltaG), deltaB) * 2;
+                coverage = MIN(coverage, 255);
+            }
+
+            pixel[0] = pixel[1] = pixel[2] = pixel[3] = (uint8_t)coverage;
+
+            if (coverage > 24) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+
+    UIImage *template = nil;
+    if (minX <= maxX && minY <= maxY) {
+        CGImageRef masked = CGBitmapContextCreateImage(context);
+        if (masked != NULL) {
+            CGRect glyphBounds = CGRectMake(
+                minX,
+                minY,
+                maxX - minX + 1,
+                maxY - minY + 1
+            );
+            CGImageRef cropped = CGImageCreateWithImageInRect(masked, glyphBounds);
+            if (cropped != NULL) {
+                template = [[UIImage imageWithCGImage:cropped
+                                                scale:rendered.scale
+                                          orientation:UIImageOrientationUp]
+                    imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                CGImageRelease(cropped);
+            }
+            CGImageRelease(masked);
+        }
+    }
+
+    CGContextRelease(context);
+    free(pixels);
+    return template;
+}
+
+UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *entry,
+                                               CGSize size) {
+    if (size.width <= 0.0 || size.height <= 0.0) {
+        return [UIImage new];
+    }
+
+    NSNumber *glyphValue = [entry[@"iconGlyph"] isKindOfClass:[NSNumber class]]
+        ? entry[@"iconGlyph"]
+        : nil;
+    uint32_t glyphNumber = glyphValue.unsignedIntValue;
+    if (glyphNumber == 0 || glyphNumber > UINT16_MAX) {
+        return nil;
+    }
+
+    // Apple's renderer first: the glyph font on disk is missing entries the
+    // renderer still draws, which left those modules on the generic mark.
+    UIImage *appleTemplate = CSLTemplateFromAppleGlyph(glyphNumber, size);
+    if (appleTemplate != nil) {
+        return appleTemplate;
+    }
+
+    NSString *fontName = CSLWorkflowGlyphFontName();
+    if (fontName.length == 0) {
+        return nil;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+    BOOL drawn = CSLDrawWorkflowGlyphWithRatio(
+        UIGraphicsGetCurrentContext(),
+        bounds,
+        fontName,
+        glyphNumber,
+        0.86
+    );
+    UIImage *image = drawn ? UIGraphicsGetImageFromCurrentImageContext() : nil;
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+/// Shortcuts an app donates through "Add to Siri" carry no glyph; the Shortcuts
+/// app draws the app's own icon in their place.
+static UIImage *CSLApplicationIconImage(NSString *bundleIdentifier) {
+    if (bundleIdentifier.length == 0) {
+        return nil;
+    }
+
+    SEL selector =
+        NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if (![UIImage respondsToSelector:selector]) {
+        return nil;
+    }
+
+    @try {
+        return ((UIImage *(*)(id, SEL, NSString *, int, CGFloat))objc_msgSend)(
+            [UIImage class],
+            selector,
+            bundleIdentifier,
+            2,
+            UIScreen.mainScreen.scale
+        );
+    } @catch (NSException *exception) {
+        NSLog(@"[CCShortcutLauncher][Icon] APP_ICON_EXCEPTION bundle=%@ exception=%@",
+              bundleIdentifier,
+              exception.name);
+        return nil;
+    }
+}
+
+/// Draws the app icon on the Shortcut's own coloured tile, the way the
+/// Shortcuts app presents a donated Shortcut.
+static UIImage *CSLApplicationTileImage(NSDictionary<NSString *, id> *entry,
+                                        CGSize size) {
+    id bundleValue = entry[@"appBundleID"];
+    if (![bundleValue isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+    UIImage *appIcon = CSLApplicationIconImage((NSString *)bundleValue);
+    if (appIcon == nil) {
+        return nil;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+    CGFloat cornerRadius = MIN(size.width, size.height) * 0.22;
+    [[UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:cornerRadius] addClip];
+    [CSLShortcutColorFromValue(entry[@"iconColor"]) setFill];
+    UIRectFill(bounds);
+
+    CGFloat side = MIN(size.width, size.height) * 0.62;
+    CGRect iconRect = CGRectMake(
+        CGRectGetMidX(bounds) - side / 2.0,
+        CGRectGetMidY(bounds) - side / 2.0,
+        side,
+        side
+    );
+    UIBezierPath *iconMask =
+        [UIBezierPath bezierPathWithRoundedRect:iconRect cornerRadius:side * 0.23];
+    CGContextSaveGState(UIGraphicsGetCurrentContext());
+    [iconMask addClip];
+    [appIcon drawInRect:iconRect];
+    CGContextRestoreGState(UIGraphicsGetCurrentContext());
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
 UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
                                       CGSize size) {
     if (size.width <= 0.0 || size.height <= 0.0) {
@@ -435,6 +665,14 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
         ? entry[@"iconGlyph"]
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
+
+    // A donated Shortcut still carries the default Shortcuts glyph, so waiting
+    // for a missing glyph never fires. The app it belongs to is the better
+    // signal, and it is what the Shortcuts app itself draws for these.
+    UIImage *applicationTile = CSLApplicationTileImage(entry, size);
+    if (applicationTile != nil) {
+        return applicationTile;
+    }
     NSNumber *colorValue = [entry[@"iconColor"] isKindOfClass:[NSNumber class]]
         ? entry[@"iconColor"]
         : nil;

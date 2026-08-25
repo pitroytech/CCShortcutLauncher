@@ -1,22 +1,219 @@
 #import "CSLRootListController.h"
 #import "CSLShortcutOrderController.h"
+#import "../CSLShortcutIcon.h"
+#import "../CSLSlotPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
+#import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 
 static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
+/// Declared here because the Preferences headers do not always ship it.
+@interface PSListController (CSLSpecifierLookup)
+- (PSSpecifier *)specifierAtIndexPath:(NSIndexPath *)indexPath;
+@end
+
+static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
+/// Preferences reads this property to draw the icon on the left of a row.
+static NSString *const CSLSpecifierIconKey = @"iconImage";
+static const CGFloat CSLSpecifierIconSide = 29.0;
 
 @implementation CSLRootListController
 
 - (NSArray *)specifiers {
     if (_specifiers == nil) {
-        _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
+        CSLMigrateLegacySelectionIfNeeded();
+        CSLRemoveDiagnosticPreferences();
+
+        NSMutableArray *specifiers =
+            [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
+
+        NSUInteger slotCount = CSLModuleSlotCount();
+        for (NSUInteger slot = 0; slot < slotCount; slot++) {
+            PSSpecifier *specifier =
+                [PSSpecifier preferenceSpecifierNamed:CSLDisplayNameForSlot(slot)
+                                               target:self
+                                                  set:NULL
+                                                  get:@selector(shortcutSummaryForSpecifier:)
+                                               detail:Nil
+                                                 cell:PSLinkCell
+                                                 edit:Nil];
+            specifier->action = @selector(openModuleSlot:);
+            [specifier setProperty:@(slot) forKey:CSLSlotSpecifierKey];
+            [specifier setProperty:[self iconForSlot:slot] forKey:CSLSpecifierIconKey];
+            [specifiers addObject:specifier];
+        }
+
+        PSSpecifier *respringGroup = [PSSpecifier emptyGroupSpecifier];
+        [respringGroup setProperty:@"Changes apply without a respring. Use this only if Control Center does not pick a change up."
+                            forKey:@"footerText"];
+        [specifiers addObject:respringGroup];
+
+        PSSpecifier *respring = [PSSpecifier preferenceSpecifierNamed:@"Respring"
+                                                               target:self
+                                                                  set:NULL
+                                                                  get:NULL
+                                                               detail:Nil
+                                                                 cell:PSButtonCell
+                                                                 edit:Nil];
+        respring->action = @selector(confirmRespring);
+        [specifiers addObject:respring];
+
+        PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
+        [footer setProperty:@"Version 1.5.0 · Run selected Shortcuts in the background from Control Center."
+                     forKey:@"footerText"];
+        [specifiers addObject:footer];
+
+        _specifiers = [specifiers copy];
     }
 
     return _specifiers;
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // The module count and the module names can both change on the pages this
+    // controller pushes, so the slot rows are rebuilt on every appearance.
+    [self reloadSpecifiers];
+}
+
+/// Returns NSNotFound for the rows that are not a module.
+- (NSUInteger)slotForSpecifier:(PSSpecifier *)specifier {
+    id slotValue = [specifier propertyForKey:CSLSlotSpecifierKey];
+    if (![slotValue isKindOfClass:[NSNumber class]]) {
+        return NSNotFound;
+    }
+    return [(NSNumber *)slotValue unsignedIntegerValue];
+}
+
+/// Mirrors what Control Center shows: a module holding one Shortcut wears that
+/// Shortcut's icon, anything else falls back to the generic grid.
+- (UIImage *)iconForSlot:(NSUInteger)slot {
+    NSArray<NSDictionary<NSString *, id> *> *entries = CSLEntriesForSlot(slot);
+    if (entries.count == 1) {
+        return CSLShortcutIconImageForEntry(
+            entries.firstObject,
+            CGSizeMake(CSLSpecifierIconSide, CSLSpecifierIconSide)
+        );
+    }
+
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:20.0
+                                                        weight:UIImageSymbolWeightRegular];
+    UIImage *symbol = [UIImage systemImageNamed:@"square.grid.2x2"
+                              withConfiguration:configuration];
+    return [symbol imageWithTintColor:[UIColor systemGrayColor]
+                        renderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
+- (id)shortcutSummaryForSpecifier:(PSSpecifier *)specifier {
+    NSUInteger slot = [self slotForSpecifier:specifier];
+    if (slot == NSNotFound) {
+        return nil;
+    }
+
+    NSUInteger count = CSLEntriesForSlot(slot).count;
+    if (count == 0) {
+        return @"None";
+    }
+    return [NSString stringWithFormat:@"%lu Shortcut%@",
+        (unsigned long)count,
+        count == 1 ? @"" : @"s"];
+}
+
+- (void)tableView:(UITableView *)tableView
+    willDisplayCell:(UITableViewCell *)cell
+  forRowAtIndexPath:(NSIndexPath *)indexPath {
+    // Preferences themes its own cells here, but do not assume the superclass
+    // implements an optional delegate method.
+    if ([PSListController instancesRespondToSelector:_cmd]) {
+        [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
+    }
+
+    PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
+    NSUInteger slot = [self slotForSpecifier:specifier];
+    if (slot == NSNotFound) {
+        return;
+    }
+
+    // Indent the modules so they read as entries under the count above them.
+    cell.indentationLevel = 1;
+    cell.indentationWidth = 16.0;
+
+    // The specifier already carries the icon and the summary, but a plain link
+    // cell does not always draw them, so fill in whatever is still empty.
+    if (cell.imageView.image == nil) {
+        cell.imageView.image = [self iconForSlot:slot];
+    }
+    if (cell.detailTextLabel.text.length == 0) {
+        cell.detailTextLabel.text = [self shortcutSummaryForSpecifier:specifier];
+    }
+}
+
+- (void)confirmRespring {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Respring"
+                         message:@"SpringBoard restarts. Anything you have open is closed."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Respring"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction *action) {
+        [self respring];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+/// Settings cannot spawn sbreload, so ask the render server to restart the way
+/// SpringBoard itself does.
+- (void)respring {
+    Class relaunchActionClass = NSClassFromString(@"SBSRelaunchAction");
+    Class systemServiceClass = NSClassFromString(@"FBSSystemService");
+    if (relaunchActionClass == Nil || systemServiceClass == Nil) {
+        [self showMessageWithTitle:@"Respring Unavailable"
+                           message:@"Restart SpringBoard from your package manager or a terminal instead."];
+        return;
+    }
+
+    @try {
+        id action = ((id (*)(id, SEL, id, NSUInteger, id))objc_msgSend)(
+            relaunchActionClass,
+            NSSelectorFromString(@"actionWithReason:options:targetURL:"),
+            @"RestartRenderServer",
+            4,
+            nil
+        );
+        id service = ((id (*)(id, SEL))objc_msgSend)(
+            systemServiceClass,
+            NSSelectorFromString(@"sharedService")
+        );
+        if (action == nil || service == nil) {
+            return;
+        }
+        ((void (*)(id, SEL, id, id))objc_msgSend)(
+            service,
+            NSSelectorFromString(@"sendActions:withResult:"),
+            [NSSet setWithObject:action],
+            nil
+        );
+    } @catch (NSException *exception) {
+        NSLog(@"[CCShortcutLauncher][Settings] RESPRING_EXCEPTION exception=%@ reason=%@",
+              exception.name,
+              exception.reason);
+    }
+}
+
+- (void)openModuleSlot:(PSSpecifier *)specifier {
+    NSUInteger slot = [self slotForSpecifier:specifier];
+    CSLShortcutOrderController *controller =
+        [[CSLShortcutOrderController alloc] initWithSlot:slot == NSNotFound ? 0 : slot];
+    [self.navigationController pushViewController:controller animated:YES];
 }
 
 - (id)preferenceValueForKey:(CFStringRef)key {
@@ -76,11 +273,14 @@ static CFStringRef const CSLCatalogRequestedNotification =
                 ? [(NSArray *)catalogValue count]
                 : 0;
 
-            if ([state isEqualToString:@"catalog_ready"] && count > 0) {
-                [self finishLoadingWithTitle:@"My Shortcuts Loaded"
-                                      message:[NSString stringWithFormat:
-                                          @"Loaded %lu Shortcuts. Open Manage Popup Shortcuts to choose and arrange them.",
-                                          (unsigned long)count]];
+            if ([state isEqualToString:@"catalog_ready"]) {
+                // Zero is a valid result: every Shortcut may have been deleted.
+                NSString *message = count > 0
+                    ? [NSString stringWithFormat:
+                        @"Cached %lu Shortcuts. Open a module below to choose which ones it runs.",
+                        (unsigned long)count]
+                    : @"No Shortcuts were found in My Shortcuts. The modules are now empty.";
+                [self finishLoadingWithTitle:@"My Shortcuts Loaded" message:message];
                 return;
             }
 
@@ -132,12 +332,6 @@ static CFStringRef const CSLCatalogRequestedNotification =
         );
         [self pollCatalogWithGeneration:generation attempt:0];
     });
-}
-
-- (void)managePopupShortcuts {
-    CSLShortcutOrderController *controller =
-        [[CSLShortcutOrderController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    [self.navigationController pushViewController:controller animated:YES];
 }
 
 @end
