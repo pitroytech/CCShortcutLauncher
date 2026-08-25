@@ -437,6 +437,77 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     return CSLDrawWorkflowGlyphWithRatio(context, bounds, fontName, glyphNumber, 0.58);
 }
 
+/// Control Center tints module glyphs, so the colourful tile Apple's renderer
+/// produces cannot be handed over as it is. Rendering that tile on black and
+/// keeping its luminance as the alpha channel recovers just the glyph shape,
+/// which is what a template image needs. This reaches every glyph the
+/// Shortcuts app can draw, including ones the glyph font does not carry.
+static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
+    UIImage *rendered = CSLAppleWorkflowIconImage(@(0x000000FF), glyphNumber, size);
+    CGImageRef source = rendered.CGImage;
+    if (source == NULL) {
+        return nil;
+    }
+
+    size_t width = CGImageGetWidth(source);
+    size_t height = CGImageGetHeight(source);
+    if (width == 0 || height == 0) {
+        return nil;
+    }
+
+    size_t pixelCount = width * height;
+    uint8_t *pixels = calloc(pixelCount, 4);
+    if (pixels == NULL) {
+        return nil;
+    }
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        pixels,
+        width,
+        height,
+        8,
+        width * 4,
+        colorSpace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+    );
+    CGColorSpaceRelease(colorSpace);
+    if (context == NULL) {
+        free(pixels);
+        return nil;
+    }
+
+    CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), source);
+
+    // White premultiplied by an alpha of a is (a, a, a, a), so writing the
+    // luminance into all four channels keeps the buffer valid.
+    BOOL hasShape = NO;
+    for (size_t i = 0; i < pixelCount; i++) {
+        uint8_t *pixel = &pixels[i * 4];
+        uint8_t luminance = MAX(MAX(pixel[0], pixel[1]), pixel[2]);
+        if (luminance > 8) {
+            hasShape = YES;
+        }
+        pixel[0] = pixel[1] = pixel[2] = pixel[3] = luminance;
+    }
+
+    UIImage *template = nil;
+    if (hasShape) {
+        CGImageRef masked = CGBitmapContextCreateImage(context);
+        if (masked != NULL) {
+            template = [[UIImage imageWithCGImage:masked
+                                            scale:rendered.scale
+                                      orientation:UIImageOrientationUp]
+                imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            CGImageRelease(masked);
+        }
+    }
+
+    CGContextRelease(context);
+    free(pixels);
+    return template;
+}
+
 UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *entry,
                                                CGSize size) {
     if (size.width <= 0.0 || size.height <= 0.0) {
@@ -447,9 +518,18 @@ UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *ent
         ? entry[@"iconGlyph"]
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
-    NSString *fontName = glyphNumber > 0 && glyphNumber <= UINT16_MAX
-        ? CSLWorkflowGlyphFontName()
-        : nil;
+    if (glyphNumber == 0 || glyphNumber > UINT16_MAX) {
+        return nil;
+    }
+
+    // Apple's renderer first: the glyph font on disk is missing entries the
+    // renderer still draws, which left those modules on the generic mark.
+    UIImage *appleTemplate = CSLTemplateFromAppleGlyph(glyphNumber, size);
+    if (appleTemplate != nil) {
+        return appleTemplate;
+    }
+
+    NSString *fontName = CSLWorkflowGlyphFontName();
     if (fontName.length == 0) {
         return nil;
     }

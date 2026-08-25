@@ -101,7 +101,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         [specifiers addObject:respring];
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.6 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.7 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
