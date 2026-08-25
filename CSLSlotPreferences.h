@@ -44,6 +44,13 @@ NSArray<NSDictionary<NSString *, id> *> *CSLEntriesForSlot(NSUInteger slot);
 /// once; call it from Settings only, never from SpringBoard.
 void CSLMigrateLegacySelectionIfNeeded(void);
 
+/// Records which image a Control Center module ended up drawing. SpringBoard
+/// decides that, and the Settings page cannot see it any other way.
+void CSLRecordModuleGlyphPath(NSUInteger slot, NSString *description);
+
+/// The recorded choices, keyed by slot, for the diagnostics report.
+NSDictionary<NSString *, NSString *> *CSLModuleGlyphPaths(void);
+
 /// SpringBoard caches the provided module list once per process, so a module
 /// added in Settings stays unusable until a respring. This asks CCSupport to
 /// re-read providers and refresh module metadata instead.

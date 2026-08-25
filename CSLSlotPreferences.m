@@ -17,6 +17,7 @@ static CFStringRef const CSLSlotShortcutIDsKey = CFSTR("SlotShortcutIDs");
 static CFStringRef const CSLSlotNamesKey = CFSTR("SlotNames");
 static CFStringRef const CSLLegacyShortcutIDsKey = CFSTR("PopupShortcutIDs");
 static CFStringRef const CSLShortcutsCatalogKey = CFSTR("ShortcutsCatalog");
+static CFStringRef const CSLModuleGlyphPathsKey = CFSTR("ModuleGlyphPaths");
 
 /// Handled by CCSupport in SpringBoard: reloads providers and refreshes the
 /// metadata of every module.
@@ -274,6 +275,29 @@ void CSLMigrateLegacySelectionIfNeeded(void) {
     CSLSetPreferenceValue(CSLLegacyShortcutIDsKey, nil);
     NSLog(@"[CCShortcutLauncher][Prefs] LEGACY_SELECTION_MIGRATED count=%lu",
           (unsigned long)legacy.count);
+}
+
+void CSLRecordModuleGlyphPath(NSUInteger slot, NSString *description) {
+    if (description.length == 0) {
+        return;
+    }
+
+    NSDictionary *stored = CSLDictionaryPreference(CSLModuleGlyphPathsKey) ?: @{};
+    NSString *key = CSLSlotStorageKey(slot);
+    if ([stored[key] isEqualToString:description]) {
+        return;
+    }
+
+    NSMutableDictionary *updated = [stored mutableCopy];
+    updated[key] = description;
+    CSLSetPreferenceValue(CSLModuleGlyphPathsKey, [updated copy]);
+    NSLog(@"[CCShortcutLauncher][Module] GLYPH slot=%lu %@",
+          (unsigned long)slot,
+          description);
+}
+
+NSDictionary<NSString *, NSString *> *CSLModuleGlyphPaths(void) {
+    return CSLDictionaryPreference(CSLModuleGlyphPathsKey) ?: @{};
 }
 
 void CSLRequestControlCenterModuleReload(void) {

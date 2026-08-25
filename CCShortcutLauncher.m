@@ -88,27 +88,35 @@ static void CSLCollectViewControllers(
 static const CGFloat CSLModuleGlyphSide = 36.0;
 
 - (UIImage *)iconGlyph {
-    // A slot holding a single Shortcut shows that Shortcut's own icon, so two
+    // A slot holding a single Shortcut shows that Shortcut's own glyph, so two
     // modules side by side stay distinguishable.
+    //
+    // Control Center renders module glyphs as tintable templates, so a
+    // full-colour app icon handed over here comes out as a solid white shape.
+    // The glyph is the only thing that survives the trip.
     NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
-    if (entries.count == 1) {
-        NSDictionary<NSString *, id> *entry = entries.firstObject;
-        CGSize side = CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide);
-
-        // A Shortcut an app donated has no glyph of its own worth showing, and
-        // its app icon is the thing the user recognises.
-        if ([entry[@"appBundleID"] isKindOfClass:[NSString class]]) {
-            UIImage *applicationIcon = CSLShortcutIconImageForEntry(entry, side);
-            if (applicationIcon != nil) {
-                return applicationIcon;
-            }
-        }
-
-        UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(entry, side);
-        if (glyph != nil) {
-            return glyph;
-        }
+    if (entries.count != 1) {
+        CSLRecordModuleGlyphPath(self.slot,
+            [NSString stringWithFormat:@"grid (%lu shortcuts)", (unsigned long)entries.count]);
+        return [UIImage systemImageNamed:@"square.grid.2x2"];
     }
+
+    NSDictionary<NSString *, id> *entry = entries.firstObject;
+    UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(
+        entry,
+        CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide)
+    );
+    if (glyph != nil) {
+        CSLRecordModuleGlyphPath(self.slot,
+            [NSString stringWithFormat:@"glyph %@ -> %.0fx%.0f",
+                entry[@"iconGlyph"] ?: @"-",
+                glyph.size.width,
+                glyph.size.height]);
+        return glyph;
+    }
+
+    CSLRecordModuleGlyphPath(self.slot,
+        [NSString stringWithFormat:@"grid (glyph %@ failed)", entry[@"iconGlyph"] ?: @"-"]);
     return [UIImage systemImageNamed:@"square.grid.2x2"];
 }
 

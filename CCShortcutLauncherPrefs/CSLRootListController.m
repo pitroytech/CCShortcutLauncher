@@ -101,7 +101,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         [specifiers addObject:respring];
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.8 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.9 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
@@ -254,6 +254,14 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
             entry[@"iconGlyph"] ?: @"-",
             entry[@"iconColor"] ?: @"-",
             entry[@"appBundleID"] ?: @"-"];
+    }
+
+    NSDictionary<NSString *, NSString *> *glyphPaths = CSLModuleGlyphPaths();
+    [report appendString:@"\nmodule glyphs (what Control Center drew):\n"];
+    for (NSUInteger slot = 0; slot < CSLModuleSlotCount(); slot++) {
+        [report appendFormat:@"  %lu: %@\n",
+            (unsigned long)slot,
+            glyphPaths[[NSString stringWithFormat:@"%lu", (unsigned long)slot]] ?: @"not drawn yet"];
     }
 
     [report appendString:@"\nslots:\n"];

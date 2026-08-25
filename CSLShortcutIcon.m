@@ -479,8 +479,17 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
 
     CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), source);
 
+    // The renderer ignores the colour asked for closely enough that the tile
+    // is never plain black, so treating darkness as transparency kept the tile
+    // itself and drew a grey square around every glyph. Sample the tile colour
+    // instead and keep only what differs from it, which is the glyph.
+    size_t sampleIndex = (((height / 8) * width) + (width / 2)) * 4;
+    uint8_t backgroundR = pixels[sampleIndex];
+    uint8_t backgroundG = pixels[sampleIndex + 1];
+    uint8_t backgroundB = pixels[sampleIndex + 2];
+
     // White premultiplied by an alpha of a is (a, a, a, a), so writing the
-    // luminance into all four channels keeps the buffer valid. The bounds of
+    // coverage into all four channels keeps the buffer valid. The bounds of
     // the drawn pixels are tracked so the padding Apple leaves around the
     // glyph can be cropped away; without that the module reads far smaller
     // than the system glyphs beside it.
@@ -488,10 +497,21 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
     for (size_t y = 0; y < height; y++) {
         for (size_t x = 0; x < width; x++) {
             uint8_t *pixel = &pixels[(y * width + x) * 4];
-            uint8_t luminance = MAX(MAX(pixel[0], pixel[1]), pixel[2]);
-            pixel[0] = pixel[1] = pixel[2] = pixel[3] = luminance;
 
-            if (luminance > 8) {
+            // Outside the rounded tile the pixels are transparent, and their
+            // premultiplied zero would otherwise read as a large difference.
+            int coverage = 0;
+            if (pixel[3] > 200) {
+                int deltaR = abs((int)pixel[0] - (int)backgroundR);
+                int deltaG = abs((int)pixel[1] - (int)backgroundG);
+                int deltaB = abs((int)pixel[2] - (int)backgroundB);
+                coverage = MAX(MAX(deltaR, deltaG), deltaB) * 2;
+                coverage = MIN(coverage, 255);
+            }
+
+            pixel[0] = pixel[1] = pixel[2] = pixel[3] = (uint8_t)coverage;
+
+            if (coverage > 24) {
                 if (x < minX) minX = x;
                 if (x > maxX) maxX = x;
                 if (y < minY) minY = y;
