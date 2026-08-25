@@ -480,25 +480,44 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
     CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), source);
 
     // White premultiplied by an alpha of a is (a, a, a, a), so writing the
-    // luminance into all four channels keeps the buffer valid.
-    BOOL hasShape = NO;
-    for (size_t i = 0; i < pixelCount; i++) {
-        uint8_t *pixel = &pixels[i * 4];
-        uint8_t luminance = MAX(MAX(pixel[0], pixel[1]), pixel[2]);
-        if (luminance > 8) {
-            hasShape = YES;
+    // luminance into all four channels keeps the buffer valid. The bounds of
+    // the drawn pixels are tracked so the padding Apple leaves around the
+    // glyph can be cropped away; without that the module reads far smaller
+    // than the system glyphs beside it.
+    size_t minX = width, maxX = 0, minY = height, maxY = 0;
+    for (size_t y = 0; y < height; y++) {
+        for (size_t x = 0; x < width; x++) {
+            uint8_t *pixel = &pixels[(y * width + x) * 4];
+            uint8_t luminance = MAX(MAX(pixel[0], pixel[1]), pixel[2]);
+            pixel[0] = pixel[1] = pixel[2] = pixel[3] = luminance;
+
+            if (luminance > 8) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
         }
-        pixel[0] = pixel[1] = pixel[2] = pixel[3] = luminance;
     }
 
     UIImage *template = nil;
-    if (hasShape) {
+    if (minX <= maxX && minY <= maxY) {
         CGImageRef masked = CGBitmapContextCreateImage(context);
         if (masked != NULL) {
-            template = [[UIImage imageWithCGImage:masked
-                                            scale:rendered.scale
-                                      orientation:UIImageOrientationUp]
-                imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            CGRect glyphBounds = CGRectMake(
+                minX,
+                minY,
+                maxX - minX + 1,
+                maxY - minY + 1
+            );
+            CGImageRef cropped = CGImageCreateWithImageInRect(masked, glyphBounds);
+            if (cropped != NULL) {
+                template = [[UIImage imageWithCGImage:cropped
+                                                scale:rendered.scale
+                                          orientation:UIImageOrientationUp]
+                    imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                CGImageRelease(cropped);
+            }
             CGImageRelease(masked);
         }
     }

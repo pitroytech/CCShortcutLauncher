@@ -84,13 +84,27 @@ static void CSLCollectViewControllers(
     return CSLEntriesForSlot(self.slot);
 }
 
+/// Matches the size of the system glyphs sitting next to the module.
+static const CGFloat CSLModuleGlyphSide = 36.0;
+
 - (UIImage *)iconGlyph {
-    // A slot holding a single Shortcut shows that Shortcut's own glyph, so two
+    // A slot holding a single Shortcut shows that Shortcut's own icon, so two
     // modules side by side stay distinguishable.
     NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
     if (entries.count == 1) {
-        UIImage *glyph =
-            CSLShortcutGlyphTemplateImageForEntry(entries.firstObject, CGSizeMake(24.0, 24.0));
+        NSDictionary<NSString *, id> *entry = entries.firstObject;
+        CGSize side = CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide);
+
+        // A Shortcut an app donated has no glyph of its own worth showing, and
+        // its app icon is the thing the user recognises.
+        if ([entry[@"appBundleID"] isKindOfClass:[NSString class]]) {
+            UIImage *applicationIcon = CSLShortcutIconImageForEntry(entry, side);
+            if (applicationIcon != nil) {
+                return applicationIcon;
+            }
+        }
+
+        UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(entry, side);
         if (glyph != nil) {
             return glyph;
         }
