@@ -547,13 +547,12 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
 
-    // Only when there is no glyph, so Shortcuts the user drew an icon for keep
-    // the icon they chose.
-    if (glyphNumber == 0) {
-        UIImage *applicationTile = CSLApplicationTileImage(entry, size);
-        if (applicationTile != nil) {
-            return applicationTile;
-        }
+    // A donated Shortcut still carries the default Shortcuts glyph, so waiting
+    // for a missing glyph never fires. The app it belongs to is the better
+    // signal, and it is what the Shortcuts app itself draws for these.
+    UIImage *applicationTile = CSLApplicationTileImage(entry, size);
+    if (applicationTile != nil) {
+        return applicationTile;
     }
     NSNumber *colorValue = [entry[@"iconColor"] isKindOfClass:[NSNumber class]]
         ? entry[@"iconColor"]

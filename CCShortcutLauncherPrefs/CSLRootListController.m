@@ -74,6 +74,17 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
             [specifiers addObject:specifier];
         }
 
+        PSSpecifier *copyDiagnostics =
+            [PSSpecifier preferenceSpecifierNamed:@"Copy Diagnostics"
+                                           target:self
+                                              set:NULL
+                                              get:NULL
+                                           detail:Nil
+                                             cell:PSButtonCell
+                                             edit:Nil];
+        copyDiagnostics->action = @selector(copyDiagnostics);
+        [specifiers addObject:copyDiagnostics];
+
         PSSpecifier *respringGroup = [PSSpecifier emptyGroupSpecifier];
         [respringGroup setProperty:@"Changes apply without a respring. Use this only if Control Center does not pick a change up."
                             forKey:@"footerText"];
@@ -90,7 +101,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         [specifiers addObject:respring];
 
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.4.5 · Run selected Shortcuts in the background from Control Center."
+        [footer setProperty:@"Version 1.4.6 · Run selected Shortcuts in the background from Control Center."
                      forKey:@"footerText"];
         [specifiers addObject:footer];
 
@@ -218,6 +229,44 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         return @"—";
     }
     return [(NSNumber *)value stringValue];
+}
+
+/// The rows truncate long values, and the per-Shortcut detail is not on screen
+/// at all, so the whole report goes to the pasteboard in one piece.
+- (void)copyDiagnostics {
+    NSMutableString *report = [NSMutableString string];
+    [report appendString:@"CCShortcutLauncher diagnostics\n"];
+    [report appendFormat:@"version: %@\n",
+        [NSBundle bundleForClass:self.class].infoDictionary[@"CFBundleShortVersionString"] ?: @"?"];
+    [report appendFormat:@"iOS: %@\n", UIDevice.currentDevice.systemVersion];
+    [report appendFormat:@"modules: %lu\n", (unsigned long)CSLModuleSlotCount()];
+
+    for (NSString *key in @[@"cachedShortcuts", @"glyphIcons", @"appIcons", @"appColumn", @"lastReload"]) {
+        PSSpecifier *probe = [PSSpecifier emptyGroupSpecifier];
+        [probe setProperty:key forKey:CSLDiagnosticSpecifierKey];
+        [report appendFormat:@"%@: %@\n", key, [self diagnosticValueForSpecifier:probe] ?: @"—"];
+    }
+
+    [report appendString:@"\nshortcuts (name | glyph | color | app):\n"];
+    for (NSDictionary<NSString *, id> *entry in CSLShortcutCatalog()) {
+        [report appendFormat:@"  %@ | %@ | %@ | %@\n",
+            entry[@"name"],
+            entry[@"iconGlyph"] ?: @"-",
+            entry[@"iconColor"] ?: @"-",
+            entry[@"appBundleID"] ?: @"-"];
+    }
+
+    [report appendString:@"\nslots:\n"];
+    for (NSUInteger slot = 0; slot < CSLModuleSlotCount(); slot++) {
+        [report appendFormat:@"  %lu %@: %@\n",
+            (unsigned long)slot,
+            CSLDisplayNameForSlot(slot),
+            [CSLShortcutIDsForSlot(slot) componentsJoinedByString:@", "] ?: @""];
+    }
+
+    UIPasteboard.generalPasteboard.string = report;
+    [self showMessageWithTitle:@"Copied"
+                       message:@"The diagnostics report is on the clipboard. Paste it wherever you need it."];
 }
 
 - (void)confirmRespring {

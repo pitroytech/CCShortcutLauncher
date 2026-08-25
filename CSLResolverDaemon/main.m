@@ -336,7 +336,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
                 appIconRows++;
             }
         }
-        if (hasGlyphValue || hasColorValue) {
+        if (hasGlyphValue) {
             iconMetadataRows++;
         }
         if (hasGlyphValue && hasColorValue) {
@@ -568,7 +568,7 @@ static void CSLPerformInitialLoad(NSUInteger attempt) {
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.5 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.4.6 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(
