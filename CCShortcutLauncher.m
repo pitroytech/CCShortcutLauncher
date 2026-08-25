@@ -95,28 +95,15 @@ static const CGFloat CSLModuleGlyphSide = 36.0;
     // full-colour app icon handed over here comes out as a solid white shape.
     // The glyph is the only thing that survives the trip.
     NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
-    if (entries.count != 1) {
-        CSLRecordModuleGlyphPath(self.slot,
-            [NSString stringWithFormat:@"grid (%lu shortcuts)", (unsigned long)entries.count]);
-        return [UIImage systemImageNamed:@"square.grid.2x2"];
+    if (entries.count == 1) {
+        UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(
+            entries.firstObject,
+            CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide)
+        );
+        if (glyph != nil) {
+            return glyph;
+        }
     }
-
-    NSDictionary<NSString *, id> *entry = entries.firstObject;
-    UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(
-        entry,
-        CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide)
-    );
-    if (glyph != nil) {
-        CSLRecordModuleGlyphPath(self.slot,
-            [NSString stringWithFormat:@"glyph %@ -> %.0fx%.0f",
-                entry[@"iconGlyph"] ?: @"-",
-                glyph.size.width,
-                glyph.size.height]);
-        return glyph;
-    }
-
-    CSLRecordModuleGlyphPath(self.slot,
-        [NSString stringWithFormat:@"grid (glyph %@ failed)", entry[@"iconGlyph"] ?: @"-"]);
     return [UIImage systemImageNamed:@"square.grid.2x2"];
 }
 

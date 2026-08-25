@@ -1,4 +1,4 @@
-# CCShortcutLauncher 1.4.9
+# CCShortcutLauncher 1.5.0
 
 Control Center module cho iOS 16 và iOS 17 (rootless). Settings tải thủ công danh
 mục My Shortcuts; mỗi module giữ danh sách Shortcut riêng. Tap module có nhiều
@@ -16,7 +16,7 @@ https://dinhno12313.github.io/
 [Add to Sileo](sileo://source/https://dinhno12313.github.io/)
 
 Package release trực tiếp cũng có tại
-[GitHub Releases](https://github.com/dinhno12313/CCShortcutLauncher/releases/tag/v1.4.9).
+[GitHub Releases](https://github.com/dinhno12313/CCShortcutLauncher/releases/tag/v1.5.0).
 
 ## Chức năng
 
@@ -90,7 +90,7 @@ make clean package FINALPACKAGE=1
 Chép package vào `/var/mobile/`, sau đó:
 
 ```sh
-sudo dpkg -i '/var/mobile/com.dinhnguyenx.ccshortcutlauncher_1.4.9_iphoneos-arm64.deb'
+sudo dpkg -i '/var/mobile/com.dinhnguyenx.ccshortcutlauncher_1.5.0_iphoneos-arm64.deb'
 sudo sbreload
 ```
 

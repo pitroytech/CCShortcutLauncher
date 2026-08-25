@@ -277,27 +277,19 @@ void CSLMigrateLegacySelectionIfNeeded(void) {
           (unsigned long)legacy.count);
 }
 
-void CSLRecordModuleGlyphPath(NSUInteger slot, NSString *description) {
-    if (description.length == 0) {
-        return;
+void CSLRemoveDiagnosticPreferences(void) {
+    CFStringRef obsoleteKeys[] = {
+        CFSTR("ResolverAppColumn"),
+        CFSTR("ResolverAppIconCount"),
+        CFSTR("ResolverGlyphIconCount"),
+        CFSTR("ResolverLastLoadDate"),
+        CSLModuleGlyphPathsKey,
+    };
+
+    for (size_t i = 0; i < sizeof(obsoleteKeys) / sizeof(obsoleteKeys[0]); i++) {
+        CFPreferencesSetAppValue(obsoleteKeys[i], NULL, CSLPreferencesDomain);
     }
-
-    NSDictionary *stored = CSLDictionaryPreference(CSLModuleGlyphPathsKey) ?: @{};
-    NSString *key = CSLSlotStorageKey(slot);
-    if ([stored[key] isEqualToString:description]) {
-        return;
-    }
-
-    NSMutableDictionary *updated = [stored mutableCopy];
-    updated[key] = description;
-    CSLSetPreferenceValue(CSLModuleGlyphPathsKey, [updated copy]);
-    NSLog(@"[CCShortcutLauncher][Module] GLYPH slot=%lu %@",
-          (unsigned long)slot,
-          description);
-}
-
-NSDictionary<NSString *, NSString *> *CSLModuleGlyphPaths(void) {
-    return CSLDictionaryPreference(CSLModuleGlyphPathsKey) ?: @{};
+    CFPreferencesAppSynchronize(CSLPreferencesDomain);
 }
 
 void CSLRequestControlCenterModuleReload(void) {
