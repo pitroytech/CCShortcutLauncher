@@ -1,9 +1,10 @@
 Package: com.dinhnguyenx.ccshortcutlauncher
 Name: CCShortcutLauncher
-Version: 1.5.0
+Version: 1.5.1
 Architecture: iphoneos-arm64
 Description: Run cached My Shortcuts in the background from one or more Control Center modules on iOS 16 and iOS 17.
 Maintainer: dinhnguyenx
 Author: dinhnguyenx
 Section: Control Center (Modules)
-Depends: firmware (>= 16.0), firmware (<< 17.4), com.opa334.ccsupport, preferenceloader
+Icon: https://dinhno12313.github.io/assets/images/ccshortcutlauncher.png?v=2
+Depends: firmware (>= 16.0), firmware (<< 17.4), com.opa334.ccsupport (>= 1.3.11), preferenceloader

@@ -1,4 +1,5 @@
 #import "CSLSlotPreferences.h"
+#import "CSLModuleIcon.h"
 
 #import <CoreFoundation/CoreFoundation.h>
 
@@ -13,8 +14,10 @@ static NSString *const CSLBaseModuleIdentifier =
 static NSString *const CSLSlotIdentifierSuffix = @".slot";
 
 static CFStringRef const CSLModuleSlotCountKey = CFSTR("ModuleSlotCount");
+static CFStringRef const CSLInterfaceLanguageKey = CFSTR("InterfaceLanguage");
 static CFStringRef const CSLSlotShortcutIDsKey = CFSTR("SlotShortcutIDs");
 static CFStringRef const CSLSlotNamesKey = CFSTR("SlotNames");
+static CFStringRef const CSLSlotIconNamesKey = CFSTR("SlotIconNames");
 static CFStringRef const CSLLegacyShortcutIDsKey = CFSTR("PopupShortcutIDs");
 static CFStringRef const CSLShortcutsCatalogKey = CFSTR("ShortcutsCatalog");
 static CFStringRef const CSLModuleGlyphPathsKey = CFSTR("ModuleGlyphPaths");
@@ -28,6 +31,22 @@ static id CSLPreferenceValue(CFStringRef key) {
     CFPreferencesAppSynchronize(CSLPreferencesDomain);
     CFPropertyListRef value = CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
     return value != NULL ? CFBridgingRelease(value) : nil;
+}
+
+NSString *CSLInterfaceLanguageCode(void) {
+    id value = CSLPreferenceValue(CSLInterfaceLanguageKey);
+    return [value isKindOfClass:[NSString class]] &&
+        [(NSString *)value isEqualToString:@"en"]
+        ? @"en"
+        : @"vi";
+}
+
+BOOL CSLUsesVietnamese(void) {
+    return [CSLInterfaceLanguageCode() isEqualToString:@"vi"];
+}
+
+NSString *CSLLocalizedText(NSString *vietnamese, NSString *english) {
+    return CSLUsesVietnamese() ? vietnamese : english;
 }
 
 static void CSLSetPreferenceValue(CFStringRef key, id _Nullable value) {
@@ -87,6 +106,9 @@ NSUInteger CSLModuleSlotCount(void) {
 
 void CSLSetModuleSlotCount(NSUInteger count) {
     NSUInteger clamped = MIN(MAX(count, CSLMinimumModuleSlotCount), CSLMaximumModuleSlotCount);
+    if (clamped == CSLModuleSlotCount()) {
+        return;
+    }
     CSLSetPreferenceValue(CSLModuleSlotCountKey, @(clamped));
     CSLRequestControlCenterModuleReload();
 }
@@ -120,7 +142,7 @@ NSUInteger CSLSlotForModuleIdentifier(NSString *identifier) {
     }
     NSScanner *scanner = [NSScanner scannerWithString:suffix];
     long long slot = 0;
-    if (![scanner scanLongLong:&slot] || !scanner.isAtEnd || slot < 0 ||
+    if (![scanner scanLongLong:&slot] || !scanner.isAtEnd || slot <= 0 ||
         slot >= (long long)CSLMaximumModuleSlotCount) {
         return NSNotFound;
     }
@@ -141,13 +163,56 @@ void CSLSetSlotName(NSString *name, NSUInteger slot) {
     NSString *trimmed = [name stringByTrimmingCharactersInSet:
         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSDictionary *stored = CSLDictionaryPreference(CSLSlotNamesKey) ?: @{};
+    NSString *storageKey = CSLSlotStorageKey(slot);
+    id existingValue = stored[storageKey];
+    NSString *existing = [existingValue isKindOfClass:[NSString class]]
+        ? [(NSString *)existingValue stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]]
+        : nil;
+    if ((trimmed.length == 0 && existing.length == 0) ||
+        [trimmed isEqualToString:existing]) {
+        return;
+    }
+
     NSMutableDictionary *updated = [stored mutableCopy];
     if (trimmed.length > 0) {
-        updated[CSLSlotStorageKey(slot)] = trimmed;
+        updated[storageKey] = trimmed;
     } else {
-        [updated removeObjectForKey:CSLSlotStorageKey(slot)];
+        [updated removeObjectForKey:storageKey];
     }
     CSLSetPreferenceValue(CSLSlotNamesKey, [updated copy]);
+    CSLRequestControlCenterModuleReload();
+}
+
+NSString *CSLSlotIconName(NSUInteger slot) {
+    id value = CSLDictionaryPreference(CSLSlotIconNamesKey)[CSLSlotStorageKey(slot)];
+    if (![value isKindOfClass:[NSString class]] ||
+        !CSLModuleIconIdentifierIsValid((NSString *)value)) {
+        return nil;
+    }
+    return value;
+}
+
+void CSLSetSlotIconName(NSString *iconName, NSUInteger slot) {
+    NSString *normalized = CSLModuleIconIdentifierIsValid(iconName) ? iconName : nil;
+    NSDictionary *stored = CSLDictionaryPreference(CSLSlotIconNamesKey) ?: @{};
+    NSString *storageKey = CSLSlotStorageKey(slot);
+    id existingValue = stored[storageKey];
+    NSString *existing = [existingValue isKindOfClass:[NSString class]] &&
+        CSLModuleIconIdentifierIsValid((NSString *)existingValue)
+        ? existingValue
+        : nil;
+    if ((normalized == nil && existing == nil) || [normalized isEqualToString:existing]) {
+        return;
+    }
+
+    NSMutableDictionary *updated = [stored mutableCopy];
+    if (normalized != nil) {
+        updated[storageKey] = normalized;
+    } else {
+        [updated removeObjectForKey:storageKey];
+    }
+    CSLSetPreferenceValue(CSLSlotIconNamesKey, [updated copy]);
     CSLRequestControlCenterModuleReload();
 }
 
@@ -240,8 +305,15 @@ NSArray<NSString *> *CSLShortcutIDsForSlot(NSUInteger slot) {
 
 void CSLSetShortcutIDs(NSArray<NSString *> *identifiers, NSUInteger slot) {
     NSDictionary *stored = CSLDictionaryPreference(CSLSlotShortcutIDsKey) ?: @{};
+    NSArray<NSString *> *normalized = CSLNormalizedIdentifiers(identifiers);
+    NSArray<NSString *> *existing =
+        CSLNormalizedIdentifiers(stored[CSLSlotStorageKey(slot)]);
+    if ([normalized isEqualToArray:existing]) {
+        return;
+    }
+
     NSMutableDictionary *updated = [stored mutableCopy];
-    updated[CSLSlotStorageKey(slot)] = CSLNormalizedIdentifiers(identifiers);
+    updated[CSLSlotStorageKey(slot)] = normalized;
     CSLSetPreferenceValue(CSLSlotShortcutIDsKey, [updated copy]);
 }
 
@@ -278,18 +350,32 @@ void CSLMigrateLegacySelectionIfNeeded(void) {
 }
 
 void CSLRemoveDiagnosticPreferences(void) {
-    CFStringRef obsoleteKeys[] = {
-        CFSTR("ResolverAppColumn"),
-        CFSTR("ResolverAppIconCount"),
-        CFSTR("ResolverGlyphIconCount"),
-        CFSTR("ResolverLastLoadDate"),
-        CSLModuleGlyphPathsKey,
-    };
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        CFStringRef obsoleteKeys[] = {
+            CFSTR("ResolverAppColumn"),
+            CFSTR("ResolverAppIconCount"),
+            CFSTR("ResolverGlyphIconCount"),
+            CFSTR("ResolverLastLoadDate"),
+            CSLModuleGlyphPathsKey,
+        };
 
-    for (size_t i = 0; i < sizeof(obsoleteKeys) / sizeof(obsoleteKeys[0]); i++) {
-        CFPreferencesSetAppValue(obsoleteKeys[i], NULL, CSLPreferencesDomain);
-    }
-    CFPreferencesAppSynchronize(CSLPreferencesDomain);
+        CFPreferencesAppSynchronize(CSLPreferencesDomain);
+        BOOL removedValue = NO;
+        for (size_t i = 0; i < sizeof(obsoleteKeys) / sizeof(obsoleteKeys[0]); i++) {
+            CFPropertyListRef value =
+                CFPreferencesCopyAppValue(obsoleteKeys[i], CSLPreferencesDomain);
+            if (value == NULL) {
+                continue;
+            }
+            CFRelease(value);
+            CFPreferencesSetAppValue(obsoleteKeys[i], NULL, CSLPreferencesDomain);
+            removedValue = YES;
+        }
+        if (removedValue) {
+            CFPreferencesAppSynchronize(CSLPreferencesDomain);
+        }
+    });
 }
 
 void CSLRequestControlCenterModuleReload(void) {

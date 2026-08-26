@@ -1,4 +1,5 @@
 #import "CSLShortcutIcon.h"
+#import "CSLDiagnostics.h"
 
 #import <CoreText/CoreText.h>
 #import <dlfcn.h>
@@ -7,6 +8,61 @@
 
 static Class CSLWorkflowIconClass = Nil;
 static Class CSLWorkflowIconDrawerClass = Nil;
+
+static UIImage *CSLApplicationIconImage(NSString *bundleIdentifier);
+
+/// Icon methods are called repeatedly while Settings and Control Center lay
+/// out their cells. Log each distinct decision once so an icon probe stays
+/// readable while still showing which renderer won in each process.
+static void CSLLogIconDecisionOnce(NSString *surface,
+                                   NSString *route,
+                                   NSDictionary<NSString *, id> *entry,
+                                   CGSize size) {
+#if CSL_ICON_DIAGNOSTICS
+    static NSMutableSet<NSString *> *loggedDecisions = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        loggedDecisions = [NSMutableSet set];
+    });
+
+    NSString *process = NSBundle.mainBundle.bundleIdentifier
+        ?: NSProcessInfo.processInfo.processName;
+    NSString *workflowIdentifier = [entry[@"workflowID"] isKindOfClass:[NSString class]]
+        ? entry[@"workflowID"]
+        : @"none";
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%@|%@|%.1f|%.1f",
+        process,
+        surface,
+        route,
+        workflowIdentifier,
+        size.width,
+        size.height];
+
+    @synchronized (loggedDecisions) {
+        if ([loggedDecisions containsObject:key]) {
+            return;
+        }
+        [loggedDecisions addObject:key];
+    }
+
+    NSLog(@"[CCShortcutLauncher][Icon] RENDER process=%@ surface=%@ route=%@ workflowID=%@ name=\"%@\" glyph=%@ color=%@ appBundleID=%@ size=%.1fx%.1f",
+          process,
+          surface,
+          route,
+          workflowIdentifier,
+          entry[@"name"] ?: @"",
+          entry[@"iconGlyph"] ?: @"none",
+          entry[@"iconColor"] ?: @"none",
+          entry[@"appBundleID"] ?: @"none",
+          size.width,
+          size.height);
+#else
+    (void)surface;
+    (void)route;
+    (void)entry;
+    (void)size;
+#endif
+}
 
 static BOOL CSLAppleRendererClassesAreReady(SEL iconInitializer,
                                             SEL drawerInitializer,
@@ -437,13 +493,13 @@ static BOOL CSLDrawWorkflowGlyph(CGContextRef context,
     return CSLDrawWorkflowGlyphWithRatio(context, bounds, fontName, glyphNumber, 0.58);
 }
 
-/// Control Center tints module glyphs, so the colourful tile Apple's renderer
-/// produces cannot be handed over as it is. Rendering that tile on black and
-/// keeping its luminance as the alpha channel recovers just the glyph shape,
-/// which is what a template image needs. This reaches every glyph the
-/// Shortcuts app can draw, including ones the glyph font does not carry.
-static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
-    UIImage *rendered = CSLAppleWorkflowIconImage(@(0x000000FF), glyphNumber, size);
+/// Converts artwork with a mostly uniform background into a tintable template.
+/// Boundary samples choose the dominant background colour, then only pixels
+/// that differ from it become opaque. App icons additionally reject masks that
+/// cover most of the source, avoiding the solid white square Control Center
+/// would otherwise display.
+static UIImage *CSLTemplateByRemovingBackground(UIImage *rendered,
+                                                CGFloat maximumCoverageFraction) {
     CGImageRef source = rendered.CGImage;
     if (source == NULL) {
         return nil;
@@ -451,17 +507,24 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
 
     size_t width = CGImageGetWidth(source);
     size_t height = CGImageGetHeight(source);
-    if (width == 0 || height == 0) {
+    if (width == 0 || height == 0 || width > SIZE_MAX / height) {
         return nil;
     }
 
     size_t pixelCount = width * height;
+    if (pixelCount > SIZE_MAX / 4) {
+        return nil;
+    }
     uint8_t *pixels = calloc(pixelCount, 4);
     if (pixels == NULL) {
         return nil;
     }
 
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    if (colorSpace == NULL) {
+        free(pixels);
+        return nil;
+    }
     CGContextRef context = CGBitmapContextCreate(
         pixels,
         width,
@@ -479,14 +542,50 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
 
     CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), source);
 
-    // The renderer ignores the colour asked for closely enough that the tile
-    // is never plain black, so treating darkness as transparency kept the tile
-    // itself and drew a grey square around every glyph. Sample the tile colour
-    // instead and keep only what differs from it, which is the glyph.
-    size_t sampleIndex = (((height / 8) * width) + (width / 2)) * 4;
-    uint8_t backgroundR = pixels[sampleIndex];
-    uint8_t backgroundG = pixels[sampleIndex + 1];
-    uint8_t backgroundB = pixels[sampleIndex + 2];
+    const size_t sampleCoordinates[][2] = {
+        { 4, 1 }, { 4, 7 }, { 1, 4 }, { 7, 4 },
+        { 2, 1 }, { 6, 1 }, { 2, 7 }, { 6, 7 },
+    };
+    uint8_t samples[8][3] = {0};
+    size_t sampleCount = 0;
+    for (size_t index = 0; index < 8; index++) {
+        size_t x = MIN(width - 1, (width * sampleCoordinates[index][0]) / 8);
+        size_t y = MIN(height - 1, (height * sampleCoordinates[index][1]) / 8);
+        uint8_t *sample = &pixels[(y * width + x) * 4];
+        if (sample[3] <= 200) {
+            continue;
+        }
+        samples[sampleCount][0] = sample[0];
+        samples[sampleCount][1] = sample[1];
+        samples[sampleCount][2] = sample[2];
+        sampleCount++;
+    }
+
+    if (sampleCount == 0) {
+        CGContextRelease(context);
+        free(pixels);
+        return nil;
+    }
+
+    // Pick the sample closest to all the others. This resists a logo crossing
+    // one boundary sample better than trusting a single fixed pixel.
+    size_t backgroundSample = 0;
+    NSUInteger bestScore = NSUIntegerMax;
+    for (size_t candidate = 0; candidate < sampleCount; candidate++) {
+        NSUInteger score = 0;
+        for (size_t other = 0; other < sampleCount; other++) {
+            score += abs((int)samples[candidate][0] - (int)samples[other][0]);
+            score += abs((int)samples[candidate][1] - (int)samples[other][1]);
+            score += abs((int)samples[candidate][2] - (int)samples[other][2]);
+        }
+        if (score < bestScore) {
+            bestScore = score;
+            backgroundSample = candidate;
+        }
+    }
+    uint8_t backgroundR = samples[backgroundSample][0];
+    uint8_t backgroundG = samples[backgroundSample][1];
+    uint8_t backgroundB = samples[backgroundSample][2];
 
     // White premultiplied by an alpha of a is (a, a, a, a), so writing the
     // coverage into all four channels keeps the buffer valid. The bounds of
@@ -494,6 +593,8 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
     // glyph can be cropped away; without that the module reads far smaller
     // than the system glyphs beside it.
     size_t minX = width, maxX = 0, minY = height, maxY = 0;
+    size_t opaquePixelCount = 0;
+    size_t coveredPixelCount = 0;
     for (size_t y = 0; y < height; y++) {
         for (size_t x = 0; x < width; x++) {
             uint8_t *pixel = &pixels[(y * width + x) * 4];
@@ -502,6 +603,7 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
             // premultiplied zero would otherwise read as a large difference.
             int coverage = 0;
             if (pixel[3] > 200) {
+                opaquePixelCount++;
                 int deltaR = abs((int)pixel[0] - (int)backgroundR);
                 int deltaG = abs((int)pixel[1] - (int)backgroundG);
                 int deltaB = abs((int)pixel[2] - (int)backgroundB);
@@ -512,6 +614,7 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
             pixel[0] = pixel[1] = pixel[2] = pixel[3] = (uint8_t)coverage;
 
             if (coverage > 24) {
+                coveredPixelCount++;
                 if (x < minX) minX = x;
                 if (x > maxX) maxX = x;
                 if (y < minY) minY = y;
@@ -521,7 +624,13 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
     }
 
     UIImage *template = nil;
-    if (minX <= maxX && minY <= maxY) {
+    CGFloat coverageFraction = opaquePixelCount > 0
+        ? (CGFloat)coveredPixelCount / (CGFloat)opaquePixelCount
+        : 1.0;
+    BOOL acceptableCoverage =
+        coveredPixelCount > 0 &&
+        coverageFraction <= maximumCoverageFraction;
+    if (acceptableCoverage && minX <= maxX && minY <= maxY) {
         CGImageRef masked = CGBitmapContextCreateImage(context);
         if (masked != NULL) {
             CGRect glyphBounds = CGRectMake(
@@ -547,10 +656,51 @@ static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
     return template;
 }
 
+/// Control Center tints module glyphs, so the colourful tile Apple's renderer
+/// produces cannot be handed over as it is. Remove the tile background and
+/// retain only the glyph shape.
+static UIImage *CSLTemplateFromAppleGlyph(uint32_t glyphNumber, CGSize size) {
+    UIImage *rendered = CSLAppleWorkflowIconImage(@(0x000000FF), glyphNumber, size);
+    return CSLTemplateByRemovingBackground(rendered, 1.0);
+}
+
+/// Uses the same owning-app artwork as Settings, but extracts its foreground
+/// into the monochrome template format required by Control Center.
+static UIImage *CSLTemplateFromApplicationIcon(NSString *bundleIdentifier,
+                                               CGSize size) {
+    UIImage *applicationIcon = CSLApplicationIconImage(bundleIdentifier);
+    if (applicationIcon == nil) {
+        return nil;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    [applicationIcon drawInRect:CGRectMake(0.0, 0.0, size.width, size.height)];
+    UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return CSLTemplateByRemovingBackground(rendered, 0.60);
+}
+
 UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *entry,
                                                CGSize size) {
     if (size.width <= 0.0 || size.height <= 0.0) {
-        return [UIImage new];
+        CSLLogIconDecisionOnce(@"module", @"invalid-size", entry, size);
+        return nil;
+    }
+
+    NSString *bundleIdentifier =
+        [entry[@"appBundleID"] isKindOfClass:[NSString class]]
+            ? entry[@"appBundleID"]
+            : nil;
+    if (bundleIdentifier.length > 0) {
+        UIImage *applicationTemplate = CSLTemplateFromApplicationIcon(
+            bundleIdentifier,
+            size
+        );
+        if (applicationTemplate != nil) {
+            CSLLogIconDecisionOnce(@"module", @"app-template", entry, size);
+            return applicationTemplate;
+        }
+        CSLLogIconDecisionOnce(@"module", @"app-template-failed", entry, size);
     }
 
     NSNumber *glyphValue = [entry[@"iconGlyph"] isKindOfClass:[NSNumber class]]
@@ -558,6 +708,7 @@ UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *ent
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
     if (glyphNumber == 0 || glyphNumber > UINT16_MAX) {
+        CSLLogIconDecisionOnce(@"module", @"missing-glyph", entry, size);
         return nil;
     }
 
@@ -565,11 +716,13 @@ UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *ent
     // renderer still draws, which left those modules on the generic mark.
     UIImage *appleTemplate = CSLTemplateFromAppleGlyph(glyphNumber, size);
     if (appleTemplate != nil) {
+        CSLLogIconDecisionOnce(@"module", @"apple-template", entry, size);
         return appleTemplate;
     }
 
     NSString *fontName = CSLWorkflowGlyphFontName();
     if (fontName.length == 0) {
+        CSLLogIconDecisionOnce(@"module", @"apple-failed-no-font", entry, size);
         return nil;
     }
 
@@ -584,11 +737,15 @@ UIImage *CSLShortcutGlyphTemplateImageForEntry(NSDictionary<NSString *, id> *ent
     );
     UIImage *image = drawn ? UIGraphicsGetImageFromCurrentImageContext() : nil;
     UIGraphicsEndImageContext();
+    CSLLogIconDecisionOnce(
+        @"module",
+        drawn ? @"font-template" : @"apple-and-font-failed",
+        entry,
+        size
+    );
     return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
-/// Shortcuts an app donates through "Add to Siri" carry no glyph; the Shortcuts
-/// app draws the app's own icon in their place.
 static UIImage *CSLApplicationIconImage(NSString *bundleIdentifier) {
     if (bundleIdentifier.length == 0) {
         return nil;
@@ -616,10 +773,13 @@ static UIImage *CSLApplicationIconImage(NSString *bundleIdentifier) {
     }
 }
 
-/// Draws the app icon on the Shortcut's own coloured tile, the way the
-/// Shortcuts app presents a donated Shortcut.
-static UIImage *CSLApplicationTileImage(NSDictionary<NSString *, id> *entry,
-                                        CGSize size) {
+/// Draw the owning app's icon directly on a transparent canvas. App icons
+/// already contain their own artwork and mask, so adding the Shortcut's colour
+/// behind them produces an unwanted green/blue border.
+static UIImage *CSLApplicationIconImageForEntry(
+    NSDictionary<NSString *, id> *entry,
+    CGSize size
+) {
     id bundleValue = entry[@"appBundleID"];
     if (![bundleValue isKindOfClass:[NSString class]]) {
         return nil;
@@ -631,24 +791,7 @@ static UIImage *CSLApplicationTileImage(NSDictionary<NSString *, id> *entry,
 
     UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
     CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
-    CGFloat cornerRadius = MIN(size.width, size.height) * 0.22;
-    [[UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:cornerRadius] addClip];
-    [CSLShortcutColorFromValue(entry[@"iconColor"]) setFill];
-    UIRectFill(bounds);
-
-    CGFloat side = MIN(size.width, size.height) * 0.62;
-    CGRect iconRect = CGRectMake(
-        CGRectGetMidX(bounds) - side / 2.0,
-        CGRectGetMidY(bounds) - side / 2.0,
-        side,
-        side
-    );
-    UIBezierPath *iconMask =
-        [UIBezierPath bezierPathWithRoundedRect:iconRect cornerRadius:side * 0.23];
-    CGContextSaveGState(UIGraphicsGetCurrentContext());
-    [iconMask addClip];
-    [appIcon drawInRect:iconRect];
-    CGContextRestoreGState(UIGraphicsGetCurrentContext());
+    [appIcon drawInRect:bounds];
 
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
@@ -658,6 +801,7 @@ static UIImage *CSLApplicationTileImage(NSDictionary<NSString *, id> *entry,
 UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
                                       CGSize size) {
     if (size.width <= 0.0 || size.height <= 0.0) {
+        CSLLogIconDecisionOnce(@"tile", @"invalid-size", entry, size);
         return [UIImage new];
     }
 
@@ -665,13 +809,13 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
         ? entry[@"iconGlyph"]
         : nil;
     uint32_t glyphNumber = glyphValue.unsignedIntValue;
-
-    // A donated Shortcut still carries the default Shortcuts glyph, so waiting
-    // for a missing glyph never fires. The app it belongs to is the better
-    // signal, and it is what the Shortcuts app itself draws for these.
-    UIImage *applicationTile = CSLApplicationTileImage(entry, size);
-    if (applicationTile != nil) {
-        return applicationTile;
+    UIImage *applicationIcon = CSLApplicationIconImageForEntry(entry, size);
+    if (applicationIcon != nil) {
+        CSLLogIconDecisionOnce(@"tile", @"app-icon", entry, size);
+        return applicationIcon;
+    }
+    if ([entry[@"appBundleID"] isKindOfClass:[NSString class]]) {
+        CSLLogIconDecisionOnce(@"tile", @"app-icon-unavailable", entry, size);
     }
     NSNumber *colorValue = [entry[@"iconColor"] isKindOfClass:[NSNumber class]]
         ? entry[@"iconColor"]
@@ -682,6 +826,7 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
         size
     );
     if (appleImage != nil) {
+        CSLLogIconDecisionOnce(@"tile", @"apple-tile", entry, size);
         return appleImage;
     }
 
@@ -698,12 +843,24 @@ UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
     [background fill];
 
     CGContextRef context = UIGraphicsGetCurrentContext();
-    if (!CSLDrawWorkflowGlyph(context, bounds, fontName, glyphNumber)) {
+    BOOL drewWorkflowGlyph = CSLDrawWorkflowGlyph(
+        context,
+        bounds,
+        fontName,
+        glyphNumber
+    );
+    if (!drewWorkflowGlyph) {
         CSLDrawFallbackGlyph(bounds);
     }
 
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
+    CSLLogIconDecisionOnce(
+        @"tile",
+        drewWorkflowGlyph ? @"font-tile" : @"grid-fallback-tile",
+        entry,
+        size
+    );
     return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
 }
 

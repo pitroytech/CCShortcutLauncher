@@ -33,8 +33,6 @@ fi
 
 require_file "$sdk_path/System/Library/PrivateFrameworks/ControlCenterUIKit.framework/ControlCenterUIKit.tbd"
 require_file "$sdk_path/System/Library/PrivateFrameworks/Preferences.framework/Preferences.tbd"
-require_file "$sdk_path/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit.tbd"
-require_file "$sdk_path/System/Library/PrivateFrameworks/VoiceShortcutClient.framework/VoiceShortcutClient.tbd"
 require_file "$sdk_path/usr/include/sqlite3.h"
 require_file "$sdk_path/usr/lib/libsqlite3.tbd"
 
@@ -49,5 +47,6 @@ if ! command -v ldid >/dev/null 2>&1; then
 fi
 
 echo "OK: build environment is ready"
-echo "NOTE: com.opa334.ccsupport is a runtime dependency; verify it on the iPhone with dpkg -s com.opa334.ccsupport."
+echo "NOTE: WorkflowKit and VoiceShortcutClient are loaded dynamically on the iPhone; build-time stubs are not required."
+echo "NOTE: com.opa334.ccsupport >= 1.3.11 is a runtime dependency; verify it on the iPhone with dpkg -s com.opa334.ccsupport."
 echo "NOTE: preferenceloader is a runtime dependency; verify it on the iPhone with dpkg -s preferenceloader."

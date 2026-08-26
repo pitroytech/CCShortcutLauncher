@@ -9,6 +9,12 @@ FOUNDATION_EXPORT NSUInteger const CSLMinimumModuleSlotCount;
 FOUNDATION_EXPORT NSUInteger const CSLMaximumModuleSlotCount;
 FOUNDATION_EXPORT NSUInteger const CSLDefaultModuleSlotCount;
 
+/// Language selected inside the tweak. Vietnamese is used until the user
+/// explicitly selects English.
+NSString *CSLInterfaceLanguageCode(void);
+BOOL CSLUsesVietnamese(void);
+NSString *CSLLocalizedText(NSString *vietnamese, NSString *english);
+
 /// Number of modules the provider vends, clamped to the range above.
 NSUInteger CSLModuleSlotCount(void);
 void CSLSetModuleSlotCount(NSUInteger count);
@@ -24,6 +30,11 @@ NSUInteger CSLSlotForModuleIdentifier(NSString *_Nullable identifier);
 /// User supplied module name, or nil when the slot uses its default name.
 NSString *_Nullable CSLSlotName(NSUInteger slot);
 void CSLSetSlotName(NSString *_Nullable name, NSUInteger slot);
+
+/// Optional icon-pack identifier for a multi-Shortcut slot. Empty slots and
+/// single-Shortcut slots deliberately ignore this value without deleting it.
+NSString *_Nullable CSLSlotIconName(NSUInteger slot);
+void CSLSetSlotIconName(NSString *_Nullable iconName, NSUInteger slot);
 
 /// Name shown in Settings and in the Control Center popup.
 NSString *CSLDisplayNameForSlot(NSUInteger slot);

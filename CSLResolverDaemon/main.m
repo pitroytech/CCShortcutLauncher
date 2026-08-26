@@ -1,6 +1,8 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 
+#import "../CSLDiagnostics.h"
+
 #import <fcntl.h>
 #import <sqlite3.h>
 #import <stdint.h>
@@ -20,12 +22,15 @@ static CFStringRef const CSLCatalogRequestedNotification =
 static const int64_t CSLRefreshDebounceNanoseconds = 3 * NSEC_PER_SEC;
 static const int64_t CSLWatchRearmNanoseconds = 2 * NSEC_PER_SEC;
 static const int64_t CSLInitialLoadNanoseconds = 5 * NSEC_PER_SEC;
-static const int64_t CSLInitialRetryNanoseconds = 30 * NSEC_PER_SEC;
-static const NSUInteger CSLInitialLoadAttemptLimit = 4;
+static const int64_t CSLInitialRetryShortNanoseconds = 30 * NSEC_PER_SEC;
+static const int64_t CSLInitialRetryMediumNanoseconds = 60 * NSEC_PER_SEC;
+static const int64_t CSLInitialRetryLongNanoseconds = 120 * NSEC_PER_SEC;
 
 static dispatch_source_t CSLDatabaseWatchSource = nil;
 static dispatch_source_t CSLDirectoryWatchSource = nil;
 static uint64_t CSLRefreshGeneration = 0;
+static uint64_t CSLWatchRearmGeneration = 0;
+static BOOL CSLHasLoadedCatalog = NO;
 
 static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser);
 static void CSLStartWatchingDatabase(void);
@@ -81,9 +86,9 @@ static BOOL CSLTableHasColumn(sqlite3 *database, NSString *table, NSString *colu
     return found;
 }
 
-/// Shortcuts an app donates through "Add to Siri" wear the app's icon instead
-/// of a glyph, and the app is named in a column whose name moves between iOS
-/// versions. Find it by shape rather than hardcoding one name.
+/// App-provided Shortcuts use their owning app's artwork in the Shortcuts UI.
+/// The Core Data column name is not stable across iOS releases, so locate it
+/// by its semantic fragments rather than assuming one schema spelling.
 static NSString *CSLAssociatedAppColumn(sqlite3 *database) {
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(database, "PRAGMA table_info(ZSHORTCUT)", -1, &statement, NULL)
@@ -101,8 +106,6 @@ static NSString *CSLAssociatedAppColumn(sqlite3 *database) {
     }
     sqlite3_finalize(statement);
 
-    // Most specific first: a column naming the associated app beats a column
-    // that merely happens to hold some bundle identifier.
     NSArray<NSArray<NSString *> *> *patterns = @[
         @[@"ASSOCIATEDAPP", @"BUNDLE"],
         @[@"APPBUNDLE"],
@@ -128,6 +131,7 @@ static NSString *CSLAssociatedAppColumn(sqlite3 *database) {
 
 /// Logs the column names once so a schema change is visible in the log.
 static void CSLLogIconSchemaOnce(sqlite3 *database) {
+#if CSL_ICON_DIAGNOSTICS
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         for (NSString *table in @[@"ZSHORTCUT", @"ZSHORTCUTICON"]) {
@@ -153,6 +157,9 @@ static void CSLLogIconSchemaOnce(sqlite3 *database) {
                   [columns componentsJoinedByString:@","]);
         }
     });
+#else
+    (void)database;
+#endif
 }
 
 /// Automatic refreshes must not leave an error behind: the Settings UI polls
@@ -200,7 +207,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         }
         CSLReportFailure(
             requestedByUser,
-            @"The Shortcuts database is unavailable. Unlock the device and try again.",
+            @"Your Shortcuts are not available yet. Unlock the device and try again.",
             @"db_open_failed"
         );
         return NO;
@@ -267,7 +274,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         sqlite3_close(database);
         CSLReportFailure(
             requestedByUser,
-            @"Unable to read the Shortcut catalog. Try again.",
+            @"CCShortcutLauncher could not load your Shortcuts. Please try again.",
             @"db_query_prepare_failed"
         );
         return NO;
@@ -342,6 +349,14 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         if (hasGlyphValue && hasColorValue) {
             completeIconRows++;
         }
+        CSLIconDiagnosticLog(
+            @"[CCShortcutLauncher][Resolver] CATALOG_ICON workflowID=%@ name=\"%@\" glyph=%@ color=%@ appBundleID=%@",
+            normalizedIdentifier,
+            shortcutName,
+            entry[@"iconGlyph"] ?: @"none",
+            entry[@"iconColor"] ?: @"none",
+            entry[@"appBundleID"] ?: @"none"
+        );
         [catalog addObject:entry];
     }
 
@@ -353,7 +368,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         sqlite3_close(database);
         CSLReportFailure(
             requestedByUser,
-            @"Unable to read the complete Shortcut catalog. Try again.",
+            @"CCShortcutLauncher could not finish loading your Shortcuts. Please try again.",
             @"db_query_step_failed"
         );
         return NO;
@@ -383,7 +398,11 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
     }
 
     if (CSLCatalogEqualsStoredCatalog(catalog)) {
+        CSLHasLoadedCatalog = YES;
         CSLPublishResolverState(@"catalog_ready", nil);
+        if (CSLDirectoryWatchSource == nil || CSLDatabaseWatchSource == nil) {
+            CSLStartWatchingDatabase();
+        }
         NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_UNCHANGED count=%lu",
               (unsigned long)catalog.count);
         return YES;
@@ -400,7 +419,11 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         (__bridge CFNumberRef)catalogCount,
         CSLPreferencesDomain
     );
+    CSLHasLoadedCatalog = YES;
     BOOL synchronized = CSLPublishResolverState(@"catalog_ready", nil);
+    if (CSLDirectoryWatchSource == nil || CSLDatabaseWatchSource == nil) {
+        CSLStartWatchingDatabase();
+    }
     NSLog(@"[CCShortcutLauncher][Resolver] CATALOG_LOADED count=%lu skipped=%lu icons=%lu completeIcons=%lu appIcons=%lu appColumn=%@ synchronized=%d",
           (unsigned long)catalog.count,
           (unsigned long)skippedRows,
@@ -476,16 +499,22 @@ static dispatch_source_t CSLMakeVnodeSource(NSString *path,
 }
 
 static void CSLRearmWatchLater(void) {
+    uint64_t generation = ++CSLWatchRearmGeneration;
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, CSLWatchRearmNanoseconds),
         dispatch_get_main_queue(),
         ^{
+            if (generation != CSLWatchRearmGeneration) {
+                return;
+            }
             CSLStartWatchingDatabase();
         }
     );
 }
 
 static void CSLStartWatchingDatabase(void) {
+    // Any direct restart supersedes a previously scheduled rearm.
+    CSLWatchRearmGeneration++;
     if (CSLDirectoryWatchSource != nil) {
         dispatch_source_cancel(CSLDirectoryWatchSource);
         CSLDirectoryWatchSource = nil;
@@ -529,23 +558,38 @@ static void CSLStartWatchingDatabase(void) {
 }
 
 static void CSLPerformInitialLoad(NSUInteger attempt) {
-    if (CSLLoadShortcutCatalog(NO) || attempt + 1 >= CSLInitialLoadAttemptLimit) {
+    if (CSLHasLoadedCatalog || CSLLoadShortcutCatalog(NO)) {
         return;
     }
 
-    // Right after boot the database can still be locked behind first unlock.
+    // Right after boot the database can remain unavailable until first unlock.
+    // Keep retrying, but cap the cadence so a device that stays locked does
+    // not wake the daemon every few seconds. A manual or watcher-triggered
+    // successful load flips CSLHasLoadedCatalog and cancels this chain.
+    int64_t retryDelay = CSLInitialRetryLongNanoseconds;
+    if (attempt < 3) {
+        retryDelay = CSLInitialRetryShortNanoseconds;
+    } else if (attempt == 3) {
+        retryDelay = CSLInitialRetryMediumNanoseconds;
+    }
+    NSUInteger nextAttempt = attempt < NSUIntegerMax ? attempt + 1 : attempt;
+    NSLog(@"[CCShortcutLauncher][Resolver] INITIAL_LOAD_RETRY nextAttempt=%lu delaySeconds=%lld",
+          (unsigned long)(nextAttempt + 1),
+          (long long)(retryDelay / NSEC_PER_SEC));
     dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, CSLInitialRetryNanoseconds),
+        dispatch_time(DISPATCH_TIME_NOW, retryDelay),
         dispatch_get_main_queue(),
         ^{
-            CSLPerformInitialLoad(attempt + 1);
+            if (!CSLHasLoadedCatalog) {
+                CSLPerformInitialLoad(nextAttempt);
+            }
         }
     );
 }
 
 int main(__unused int argc, __unused char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.5.0 uid=%u",
+        NSLog(@"[CCShortcutLauncher][Resolver] START version=1.5.1 uid=%u",
               geteuid());
 
         CFNotificationCenterAddObserver(

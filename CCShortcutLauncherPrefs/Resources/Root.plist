@@ -7,64 +7,76 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>id</key>
+			<string>LanguageGroup</string>
 			<key>label</key>
-			<string>MY SHORTCUTS</string>
+			<string>NGÔN NGỮ</string>
 			<key>footerText</key>
-			<string>The cache follows My Shortcuts on its own: the resolver watches the Shortcuts database and reloads names, identifiers, and icons a few seconds after a change. Use this button to force a reload. Loading never assigns Shortcuts to a module.</string>
+			<string>Chọn ngôn ngữ dùng trong phần cài đặt và menu phím tắt.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSLinkListCell</string>
+			<key>detail</key>
+			<string>PSListItemsController</string>
+			<key>id</key>
+			<string>Language</string>
+			<key>label</key>
+			<string>Ngôn ngữ</string>
+			<key>key</key>
+			<string>InterfaceLanguage</string>
+			<key>defaults</key>
+			<string>com.dinhnguyenx.ccshortcutlauncher</string>
+			<key>default</key>
+			<string>vi</string>
+			<key>validValues</key>
+			<array>
+				<string>vi</string>
+				<string>en</string>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>Tiếng Việt</string>
+				<string>English</string>
+			</array>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>id</key>
+			<string>MyShortcutsGroup</string>
+			<key>label</key>
+			<string>PHÍM TẮT CỦA TÔI</string>
+			<key>footerText</key>
+			<string>Danh sách phím tắt được tự động cập nhật. Nếu thiếu một phím tắt, hãy chạm Tải phím tắt của tôi để làm mới, sau đó mở một mô-đun bên dưới để thêm hoặc sắp xếp.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
+			<key>id</key>
+			<string>LoadMyShortcuts</string>
 			<key>label</key>
-			<string>Load My Shortcuts</string>
+			<string>Tải phím tắt của tôi</string>
 			<key>action</key>
 			<string>loadMyShortcuts</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>id</key>
+			<string>ModulesGroup</string>
 			<key>label</key>
-			<string>CONTROL CENTER MODULES</string>
+			<string>MÔ-ĐUN TRUNG TÂM ĐIỀU KHIỂN</string>
 			<key>footerText</key>
-			<string>Each module holds its own list of Shortcuts. Add them in Settings → Control Center. Respring only if a module does not show up there.</string>
+			<string>Dùng − và + để chọn số mô-đun. Mở một mô-đun bên dưới để thêm phím tắt, đổi thứ tự hoặc đổi tên. Sau đó thêm mô-đun trong Cài đặt → Trung tâm điều khiển.</string>
 		</dict>
 		<dict>
-			<key>cell</key>
-			<string>PSLinkListCell</string>
+			<key>cellClass</key>
+			<string>CSLModuleCountCell</string>
+			<key>id</key>
+			<string>ModuleCount</string>
 			<key>label</key>
-			<string>Number of Modules</string>
-			<key>key</key>
-			<string>ModuleSlotCount</string>
-			<key>defaults</key>
-			<string>com.dinhnguyenx.ccshortcutlauncher</string>
-			<key>default</key>
-			<integer>2</integer>
-			<key>detail</key>
-			<string>PSListItemsController</string>
-			<key>PostNotification</key>
-			<string>com.opa334.ccsupport/ReloadProviders</string>
-			<key>validValues</key>
-			<array>
-				<integer>1</integer>
-				<integer>2</integer>
-				<integer>3</integer>
-				<integer>4</integer>
-				<integer>5</integer>
-				<integer>6</integer>
-				<integer>7</integer>
-				<integer>8</integer>
-			</array>
-			<key>validTitles</key>
-			<array>
-				<string>1</string>
-				<string>2</string>
-				<string>3</string>
-				<string>4</string>
-				<string>5</string>
-				<string>6</string>
-				<string>7</string>
-				<string>8</string>
-			</array>
+			<string>Số mô-đun</string>
 		</dict>
 	</array>
 	<key>title</key>

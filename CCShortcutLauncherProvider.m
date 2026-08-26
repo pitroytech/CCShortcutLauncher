@@ -1,6 +1,7 @@
 #import "CCShortcutLauncherProvider.h"
 #import "CCShortcutLauncher.h"
-#import "CSLShortcutIcon.h"
+#import "CSLDiagnostics.h"
+#import "CSLModuleIcon.h"
 #import "CSLSlotPreferences.h"
 
 #import <UIKit/UIKit.h>
@@ -82,14 +83,16 @@
     }
 
     NSArray<NSDictionary<NSString *, id> *> *entries = CSLEntriesForSlot(slot);
-    if (entries.count == 1) {
-        return CSLShortcutIconImageForEntry(entries.firstObject, CGSizeMake(29.0, 29.0));
-    }
-
-    NSBundle *bundle = [NSBundle bundleForClass:self.class];
-    return [UIImage imageNamed:@"CCShortcutLauncherIcon"
-                      inBundle:bundle
- compatibleWithTraitCollection:nil];
+    CSLIconDiagnosticLog(
+        @"[CCShortcutLauncher][Icon] SETTINGS_ICON_REQUEST slot=%lu entries=%lu",
+        (unsigned long)slot,
+        (unsigned long)entries.count
+    );
+    return CSLModuleControlCenterSettingsIconForSlot(
+        slot,
+        entries,
+        CGSizeMake(29.0, 29.0)
+    );
 }
 
 - (BOOL)providesListControllerForModuleIdentifier:(NSString *)identifier {

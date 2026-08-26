@@ -3,11 +3,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Builds a Shortcuts-style tile from the cached ZSHORTCUTICON metadata.
+/// Builds the full-colour Shortcuts tile used by popup and Settings rows.
+/// Keep this independent from the Control Center module glyph renderer below:
+/// Control Center has different tinting and will later support per-slot art.
 UIImage *CSLShortcutIconImageForEntry(NSDictionary<NSString *, id> *entry,
                                       CGSize size);
 
-/// Builds the glyph alone, without the coloured tile, as a template image.
+/// Builds the default module glyph alone, without the coloured tile, as a
+/// template image. Module-level icon selection belongs behind this boundary.
 /// Control Center tints module glyphs itself, so a tile would render as a
 /// solid block.
 /// Returns nil when the entry has no usable glyph metadata.

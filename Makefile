@@ -9,7 +9,8 @@ include $(THEOS)/makefiles/common.mk
 BUNDLE_NAME = CCShortcutLauncherProvider
 
 CCShortcutLauncherProvider_BUNDLE_EXTENSION = bundle
-CCShortcutLauncherProvider_FILES = CCShortcutLauncherProvider.m CCShortcutLauncher.m CCShortcutLauncherBackgroundRunner.m CSLShortcutIcon.m CSLSlotPreferences.m
+CCShortcutLauncherProvider_FILES = CCShortcutLauncherProvider.m CCShortcutLauncher.m CCShortcutLauncherBackgroundRunner.m CSLModuleIcon.m CSLShortcutIcon.m CSLSlotPreferences.m
+CCShortcutLauncherProvider_RESOURCE_DIRS = Resources ModuleIcons
 CCShortcutLauncherProvider_CFLAGS = -fobjc-arc -fmodules-cache-path=$(CURDIR)/.theos/module-cache
 CCShortcutLauncherProvider_FRAMEWORKS = Foundation UIKit CoreText
 CCShortcutLauncherProvider_PRIVATE_FRAMEWORKS = ControlCenterUIKit

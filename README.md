@@ -1,4 +1,4 @@
-# CCShortcutLauncher 1.5.0
+# CCShortcutLauncher 1.5.1
 
 Control Center module cho iOS 16 và iOS 17 (rootless). Settings tải thủ công danh
 mục My Shortcuts; mỗi module giữ danh sách Shortcut riêng. Tap module có nhiều
@@ -16,12 +16,14 @@ https://dinhno12313.github.io/
 [Add to Sileo](sileo://source/https://dinhno12313.github.io/)
 
 Package release trực tiếp cũng có tại
-[GitHub Releases](https://github.com/dinhno12313/CCShortcutLauncher/releases/tag/v1.5.0).
+[GitHub Releases](https://github.com/dinhno12313/CCShortcutLauncher/releases/tag/v1.5.1).
 
 ## Chức năng
 
 - Nhiều module Control Center 1×1 thông qua CCSupport, mặc định 2, tối đa 8.
   Mỗi module có danh sách Shortcut và tên riêng.
+- Giao diện cài đặt và menu chọn Shortcut hỗ trợ **Tiếng Việt / English**;
+  mặc định là Tiếng Việt và có thể đổi ngay trong trang cài đặt của tweak.
 - Module chỉ chứa đúng một Shortcut sẽ chạy ngay khi tap, không hiện popup, và
   lấy luôn glyph của Shortcut đó làm icon trong Control Center.
 - Mỗi module có trang cấu hình riêng ngay trong **Settings → Control Center**,
@@ -37,6 +39,9 @@ Package release trực tiếp cũng có tại
 - Trang quản lý và popup hiển thị icon đã đọc từ `ZSHORTCUTICON`; glyph được
   dựng qua `WFWorkflowIcon`/`WFWorkflowIconDrawer` của framework Shortcuts
   giống chính ứng dụng. CoreText và icon chung chỉ còn là fallback an toàn.
+- Module có một Shortcut tự dùng icon của Shortcut. Module có nhiều Shortcut
+  có thể chọn một trong 44 glyph đơn sắc; khi chưa chọn, cả hai trang Settings
+  và nút Control Center cùng dùng glyph lưới mặc định.
 - Bundle có icon riêng trong danh sách thêm module tại **Settings → Control
   Center**.
 - Tap module để mở action sheet chứa danh sách đã cache.
@@ -60,7 +65,9 @@ giống hệt catalog cũ thì không ghi prefs.
 Module không mở database; nó chỉ tạo popup từ cache. Module được CCSupport nạp
 qua provider bundle để provider trả trực tiếp settings icon cho danh sách
 Control Center. Lần đọc tự động thất bại (ví dụ chưa mở khóa lần đầu sau khi
-khởi động máy) chỉ ghi log và thử lại, không ghi trạng thái lỗi đè lên UI.
+khởi động máy) chỉ ghi log, giữ nhịp 30 giây cho bốn lần tải đầu, rồi thử lại
+sau 60 giây và mỗi 120 giây cho tới khi thành công; nó không ghi trạng thái
+lỗi đè lên UI.
 
 ## Dependencies
 
@@ -73,7 +80,7 @@ Máy build:
 iPhone:
 
 - iOS 16.0 - 17.3.1 và jailbreak rootless (Dopamine, palera1n...).
-- CCSupport (`com.opa334.ccsupport`).
+- CCSupport 1.3.11 trở lên (`com.opa334.ccsupport`).
 - PreferenceLoader (`preferenceloader`).
 
 ## Build
@@ -90,18 +97,19 @@ make clean package FINALPACKAGE=1
 Chép package vào `/var/mobile/`, sau đó:
 
 ```sh
-sudo dpkg -i '/var/mobile/com.dinhnguyenx.ccshortcutlauncher_1.5.0_iphoneos-arm64.deb'
+sudo dpkg -i '/var/mobile/com.dinhnguyenx.ccshortcutlauncher_1.5.1_iphoneos-arm64.deb'
 sudo sbreload
 ```
 
 Post-install script tự load resolver daemon. Sau đó:
 
 1. Vào **Settings → CCShortcutLauncher**.
-2. Bấm **Load My Shortcuts** và ghi lại số lượng báo về.
-3. Chỉnh **Number of Modules** nếu muốn khác 2.
-4. Vào **Settings → Control Center** và thêm các module **CCShortcutLauncher**.
-5. Tap từng module trong danh sách đó để chọn Shortcut, đổi thứ tự, đổi tên.
-6. Mở Control Center rồi tap module. Module nhiều Shortcut hiện popup đúng thứ
+2. Chọn **Ngôn ngữ** nếu muốn đổi từ Tiếng Việt sang English.
+3. Bấm **Tải phím tắt của tôi** và ghi lại số lượng báo về.
+4. Dùng nút **− / +** ở **Số mô-đun** nếu muốn khác 2.
+5. Vào **Settings → Control Center** và thêm các module **CCShortcutLauncher**.
+6. Tap từng module trong danh sách đó để chọn Shortcut, đổi thứ tự, đổi tên.
+7. Mở Control Center rồi tap module. Module nhiều Shortcut hiện popup đúng thứ
    tự đã sắp; module một Shortcut chạy ngay.
 
 ## Log chẩn đoán
@@ -136,7 +144,7 @@ idevicesyslog -m '[CCShortcutLauncher]' --no-colors
 - Bản 1.3.x không chọn gì thì mặc định popup hiện toàn bộ Shortcut. Từ 1.4.0
   mặc định là rỗng; lựa chọn cũ đã lưu sẽ được chuyển vào module đầu tiên.
 - Popup chưa có thanh tìm kiếm; danh sách dài dùng khả năng cuộn của action sheet.
-- Shortcut trùng tên được gắn thêm tám ký tự đầu của UUID để phân biệt.
+- Shortcut trùng tên được đánh số theo thứ tự để phân biệt, không hiển thị UUID.
 - Shortcut yêu cầu UI, mở khóa hoặc cấp quyền mới vẫn có thể cần tương tác.
 - WorkflowKit là private API của iOS. Package giới hạn firmware ở `>= 16.0`
   và `<< 17.4`: đã chạy được tới 17.3.1, từ 17.4 trở lên chưa kiểm chứng nên

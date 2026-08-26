@@ -1,5 +1,7 @@
 #import "CCShortcutLauncher.h"
 #import "CCShortcutLauncherBackgroundRunner.h"
+#import "CSLDiagnostics.h"
+#import "CSLModuleIcon.h"
 #import "CSLShortcutIcon.h"
 #import "CSLSlotPreferences.h"
 
@@ -88,23 +90,17 @@ static void CSLCollectViewControllers(
 static const CGFloat CSLModuleGlyphSide = 36.0;
 
 - (UIImage *)iconGlyph {
-    // A slot holding a single Shortcut shows that Shortcut's own glyph, so two
-    // modules side by side stay distinguishable.
-    //
-    // Control Center renders module glyphs as tintable templates, so a
-    // full-colour app icon handed over here comes out as a solid white shape.
-    // The glyph is the only thing that survives the trip.
     NSArray<NSDictionary<NSString *, id> *> *entries = [self slotEntries];
-    if (entries.count == 1) {
-        UIImage *glyph = CSLShortcutGlyphTemplateImageForEntry(
-            entries.firstObject,
-            CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide)
-        );
-        if (glyph != nil) {
-            return glyph;
-        }
-    }
-    return [UIImage systemImageNamed:@"square.grid.2x2"];
+    CSLIconDiagnosticLog(
+        @"[CCShortcutLauncher][Icon] MODULE_REQUEST slot=%lu entries=%lu",
+        (unsigned long)self.slot,
+        (unsigned long)entries.count
+    );
+    return CSLModuleTemplateGlyphForSlot(
+        self.slot,
+        entries,
+        CGSizeMake(CSLModuleGlyphSide, CSLModuleGlyphSide)
+    );
 }
 
 - (UIImage *)selectedIconGlyph {
@@ -150,18 +146,19 @@ static const CGFloat CSLModuleGlyphSide = 36.0;
 }
 
 - (NSString *)displayTitleForEntry:(NSDictionary<NSString *, id> *)entry
-                         nameCounts:(NSDictionary<NSString *, NSNumber *> *)nameCounts {
+                         nameCounts:(NSDictionary<NSString *, NSNumber *> *)nameCounts
+                    nameOccurrences:(NSMutableDictionary<NSString *, NSNumber *> *)nameOccurrences {
     NSString *shortcutName = entry[@"name"];
     NSString *countKey = shortcutName.lowercaseString;
     if (nameCounts[countKey].unsignedIntegerValue < 2) {
         return shortcutName;
     }
 
-    NSString *identifier = entry[@"workflowID"];
-    NSString *shortIdentifier = identifier.length >= 8
-        ? [identifier substringToIndex:8]
-        : identifier;
-    return [NSString stringWithFormat:@"%@ \u00b7 %@", shortcutName, shortIdentifier];
+    NSUInteger occurrence = nameOccurrences[countKey].unsignedIntegerValue + 1;
+    nameOccurrences[countKey] = @(occurrence);
+    return [NSString stringWithFormat:@"%@ (%lu)",
+        shortcutName,
+        (unsigned long)occurrence];
 }
 
 - (UIViewController *)popupPresenter {
@@ -217,12 +214,20 @@ static const CGFloat CSLModuleGlyphSide = 36.0;
         NSArray<NSDictionary<NSString *, id> *> *catalog = [self slotEntries];
         NSString *message = nil;
         if (catalog.count > 0) {
-            message = [NSString stringWithFormat:@"%lu Shortcuts included",
-                (unsigned long)catalog.count];
+            message = CSLLocalizedText(
+                @"Chọn một phím tắt để chạy.",
+                @"Choose a Shortcut to run."
+            );
         } else if (loadedCatalog.count > 0) {
-            message = @"Open Settings \u2192 Control Center, tap this module, and add Shortcuts to it.";
+            message = CSLLocalizedText(
+                @"Để thêm phím tắt, mở Cài đặt → Trung tâm điều khiển và chạm mô-đun này.",
+                @"To add a Shortcut, open Settings → Control Center and tap this module."
+            );
         } else {
-            message = @"Open Settings \u2192 CCShortcutLauncher and tap Load My Shortcuts.";
+            message = CSLLocalizedText(
+                @"Để bắt đầu, mở Cài đặt → CCShortcutLauncher và chạm Tải phím tắt của tôi.",
+                @"To get started, open Settings → CCShortcutLauncher and tap Load My Shortcuts."
+            );
         }
         UIAlertController *popup = [UIAlertController
             alertControllerWithTitle:CSLDisplayNameForSlot(self.slot)
@@ -237,8 +242,12 @@ static const CGFloat CSLModuleGlyphSide = 36.0;
         }
 
         __weak typeof(self) weakSelf = self;
+        NSMutableDictionary<NSString *, NSNumber *> *nameOccurrences =
+            [NSMutableDictionary dictionary];
         for (NSDictionary<NSString *, id> *entry in catalog) {
-            NSString *title = [self displayTitleForEntry:entry nameCounts:nameCounts];
+            NSString *title = [self displayTitleForEntry:entry
+                                               nameCounts:nameCounts
+                                          nameOccurrences:nameOccurrences];
             NSString *shortcutName = entry[@"name"];
             NSString *workflowIdentifier = entry[@"workflowID"];
             UIAlertAction *shortcutAction =
@@ -253,7 +262,7 @@ static const CGFloat CSLModuleGlyphSide = 36.0;
             [popup addAction:shortcutAction];
         }
 
-        [popup addAction:[UIAlertAction actionWithTitle:@"Cancel"
+        [popup addAction:[UIAlertAction actionWithTitle:CSLLocalizedText(@"Hủy", @"Cancel")
                                                  style:UIAlertActionStyleCancel
                                                handler:nil]];
 

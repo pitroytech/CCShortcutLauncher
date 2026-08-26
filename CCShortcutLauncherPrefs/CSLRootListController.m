@@ -1,6 +1,6 @@
 #import "CSLRootListController.h"
 #import "CSLShortcutOrderController.h"
-#import "../CSLShortcutIcon.h"
+#import "../CSLModuleIcon.h"
 #import "../CSLSlotPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
@@ -12,9 +12,35 @@ static CFStringRef const CSLPreferencesDomain =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
+static NSString *const CSLRepositoryURLString = @"https://dinhno12313.github.io";
+static NSString *const CSLRepositorySpecifierIdentifier = @"RepositoryLink";
+static NSString *const CSLSettingsVersionText =
+    @"CCShortcutLauncher 1.5.1";
+
+/// The polling path synchronizes the domain once, then reads all related keys
+/// from the same snapshot instead of forcing a disk synchronization per key.
+static id CSLPreferenceValueWithoutSynchronizing(CFStringRef key) {
+    CFPropertyListRef value =
+        CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
+    return value != NULL ? CFBridgingRelease(value) : nil;
+}
+
+static NSString *CSLPreferenceStringWithoutSynchronizing(CFStringRef key) {
+    id value = CSLPreferenceValueWithoutSynchronizing(key);
+    if (![value isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+    return [(NSString *)value stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 /// Declared here because the Preferences headers do not always ship it.
 @interface PSListController (CSLSpecifierLookup)
 - (PSSpecifier *)specifierAtIndexPath:(NSIndexPath *)indexPath;
+@end
+
+@interface CSLRootListController ()
+@property (nonatomic, copy) NSDictionary<NSNumber *, NSArray<NSDictionary<NSString *, id> *> *> *slotEntriesSnapshot;
 @end
 
 static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
@@ -22,7 +48,87 @@ static NSString *const CSLSlotSpecifierKey = @"CSLSlot";
 static NSString *const CSLSpecifierIconKey = @"iconImage";
 static const CGFloat CSLSpecifierIconSide = 29.0;
 
+/// Loads the user's repository logo without applying Preferences tinting.
+static UIImage *CSLRepositoryIcon(void) {
+    NSBundle *bundle = [NSBundle bundleForClass:CSLRootListController.class];
+    UIImage *source = [UIImage imageNamed:@"dinhnguyenxRepoLogo"
+                                 inBundle:bundle
+            compatibleWithTraitCollection:nil];
+    if (source == nil) {
+        return nil;
+    }
+
+    CGSize size = source.size;
+    UIGraphicsBeginImageContextWithOptions(size, NO, source.scale);
+    CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+    CGFloat cornerRadius = MIN(size.width, size.height) * 0.22;
+    [[UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:cornerRadius] addClip];
+    [source drawInRect:bounds];
+    UIImage *rounded = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [rounded imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
 @implementation CSLRootListController
+
+- (NSDictionary<NSNumber *, NSArray<NSDictionary<NSString *, id> *> *> *)
+    buildSlotEntriesSnapshotWithCount:(NSUInteger)slotCount {
+    NSArray<NSDictionary<NSString *, id> *> *catalog = CSLShortcutCatalog();
+    NSMutableDictionary<NSString *, NSDictionary<NSString *, id> *> *byIdentifier =
+        [NSMutableDictionary dictionaryWithCapacity:catalog.count];
+    for (NSDictionary<NSString *, id> *entry in catalog) {
+        byIdentifier[entry[@"workflowID"]] = entry;
+    }
+
+    NSMutableDictionary<NSNumber *, NSArray<NSDictionary<NSString *, id> *> *> *snapshot =
+        [NSMutableDictionary dictionaryWithCapacity:slotCount];
+    for (NSUInteger slot = 0; slot < slotCount; slot++) {
+        NSMutableArray<NSDictionary<NSString *, id> *> *entries =
+            [NSMutableArray array];
+        for (NSString *identifier in CSLShortcutIDsForSlot(slot)) {
+            NSDictionary<NSString *, id> *entry = byIdentifier[identifier];
+            if (entry != nil) {
+                [entries addObject:entry];
+            }
+        }
+        snapshot[@(slot)] = [entries copy];
+    }
+    return [snapshot copy];
+}
+
+- (void)localizeBaseSpecifiers:(NSArray<PSSpecifier *> *)specifiers {
+    for (PSSpecifier *specifier in specifiers) {
+        NSString *identifier = specifier.identifier ?: [specifier propertyForKey:@"id"];
+        if ([identifier isEqualToString:@"LanguageGroup"]) {
+            specifier.name = CSLLocalizedText(@"NGÔN NGỮ", @"LANGUAGE");
+            [specifier setProperty:CSLLocalizedText(
+                @"Chọn ngôn ngữ dùng trong phần cài đặt và menu phím tắt.",
+                @"Choose the language used in Settings and the Shortcut menu."
+            ) forKey:@"footerText"];
+        } else if ([identifier isEqualToString:@"Language"]) {
+            specifier.name = CSLLocalizedText(@"Ngôn ngữ", @"Language");
+        } else if ([identifier isEqualToString:@"MyShortcutsGroup"]) {
+            specifier.name = CSLLocalizedText(@"PHÍM TẮT CỦA TÔI", @"MY SHORTCUTS");
+            [specifier setProperty:CSLLocalizedText(
+                @"Danh sách phím tắt được tự động cập nhật. Nếu thiếu một phím tắt, hãy chạm Tải phím tắt của tôi để làm mới, sau đó mở một mô-đun bên dưới để thêm hoặc sắp xếp.",
+                @"Your Shortcut list updates automatically. If a Shortcut is missing, tap Load My Shortcuts to refresh the list, then choose a module below to add or arrange Shortcuts."
+            ) forKey:@"footerText"];
+        } else if ([identifier isEqualToString:@"LoadMyShortcuts"]) {
+            specifier.name = CSLLocalizedText(@"Tải phím tắt của tôi", @"Load My Shortcuts");
+        } else if ([identifier isEqualToString:@"ModulesGroup"]) {
+            specifier.name = CSLLocalizedText(
+                @"MÔ-ĐUN TRUNG TÂM ĐIỀU KHIỂN",
+                @"CONTROL CENTER MODULES"
+            );
+            [specifier setProperty:CSLLocalizedText(
+                @"Dùng − và + để chọn số mô-đun. Mở một mô-đun bên dưới để thêm phím tắt, đổi thứ tự hoặc đổi tên. Sau đó thêm mô-đun trong Cài đặt → Trung tâm điều khiển.",
+                @"Use − and + to choose how many controls you want. Open a module below to add Shortcuts, change their order, or rename it. Then add the module in Settings → Control Center."
+            ) forKey:@"footerText"];
+        } else if ([identifier isEqualToString:@"ModuleCount"]) {
+            specifier.name = CSLLocalizedText(@"Số mô-đun", @"Number of Modules");
+        }
+    }
+}
 
 - (NSArray *)specifiers {
     if (_specifiers == nil) {
@@ -31,8 +137,11 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
 
         NSMutableArray *specifiers =
             [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
+        [self localizeBaseSpecifiers:specifiers];
 
         NSUInteger slotCount = CSLModuleSlotCount();
+        self.slotEntriesSnapshot =
+            [self buildSlotEntriesSnapshotWithCount:slotCount];
         for (NSUInteger slot = 0; slot < slotCount; slot++) {
             PSSpecifier *specifier =
                 [PSSpecifier preferenceSpecifierNamed:CSLDisplayNameForSlot(slot)
@@ -49,23 +158,45 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         }
 
         PSSpecifier *respringGroup = [PSSpecifier emptyGroupSpecifier];
-        [respringGroup setProperty:@"Changes apply without a respring. Use this only if Control Center does not pick a change up."
+        [respringGroup setProperty:CSLLocalizedText(
+            @"Hầu hết thay đổi được áp dụng tự động. Nếu mô-đun bị thiếu hoặc vẫn hiển thị thông tin cũ, hãy chạm Khởi động lại giao diện rồi kiểm tra lại Trung tâm điều khiển.",
+            @"Most changes appear automatically. If a module is missing or still shows old information, tap Respring and check Control Center again."
+        )
                             forKey:@"footerText"];
         [specifiers addObject:respringGroup];
 
-        PSSpecifier *respring = [PSSpecifier preferenceSpecifierNamed:@"Respring"
-                                                               target:self
-                                                                  set:NULL
-                                                                  get:NULL
-                                                               detail:Nil
-                                                                 cell:PSButtonCell
-                                                                 edit:Nil];
+        PSSpecifier *respring = [PSSpecifier
+            preferenceSpecifierNamed:CSLLocalizedText(
+                @"Khởi động lại giao diện",
+                @"Respring"
+            )
+            target:self
+            set:NULL
+            get:NULL
+            detail:Nil
+            cell:PSButtonCell
+            edit:Nil];
         respring->action = @selector(confirmRespring);
         [specifiers addObject:respring];
 
+        PSSpecifier *repositoryGroup = [PSSpecifier emptyGroupSpecifier];
+        [specifiers addObject:repositoryGroup];
+
+        PSSpecifier *repository =
+            [PSSpecifier preferenceSpecifierNamed:@"dinhnguyenx Repo"
+                                           target:self
+                                              set:NULL
+                                              get:NULL
+                                           detail:Nil
+                                             cell:PSButtonCell
+                                             edit:Nil];
+        repository.identifier = CSLRepositorySpecifierIdentifier;
+        [repository setProperty:CSLRepositoryIcon() forKey:CSLSpecifierIconKey];
+        repository->action = @selector(openRepository);
+        [specifiers addObject:repository];
+
         PSSpecifier *footer = [PSSpecifier emptyGroupSpecifier];
-        [footer setProperty:@"Version 1.5.0 · Run selected Shortcuts in the background from Control Center."
-                     forKey:@"footerText"];
+        [footer setProperty:CSLSettingsVersionText forKey:@"footerText"];
         [specifiers addObject:footer];
 
         _specifiers = [specifiers copy];
@@ -81,6 +212,12 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     [self reloadSpecifiers];
 }
 
+- (void)moduleCountCellDidChange:(__unused CSLModuleCountCell *)cell {
+    // Rebuild the module rows immediately while preserving all slot data. A
+    // later increase restores the previous names and Shortcut assignments.
+    [self reloadSpecifiers];
+}
+
 /// Returns NSNotFound for the rows that are not a module.
 - (NSUInteger)slotForSpecifier:(PSSpecifier *)specifier {
     id slotValue = [specifier propertyForKey:CSLSlotSpecifierKey];
@@ -90,24 +227,16 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     return [(NSNumber *)slotValue unsignedIntegerValue];
 }
 
-/// Mirrors what Control Center shows: a module holding one Shortcut wears that
-/// Shortcut's icon, anything else falls back to the generic grid.
+/// Uses the same routing as Settings → Control Center so both module lists
+/// always show the same image.
 - (UIImage *)iconForSlot:(NSUInteger)slot {
-    NSArray<NSDictionary<NSString *, id> *> *entries = CSLEntriesForSlot(slot);
-    if (entries.count == 1) {
-        return CSLShortcutIconImageForEntry(
-            entries.firstObject,
-            CGSizeMake(CSLSpecifierIconSide, CSLSpecifierIconSide)
-        );
-    }
-
-    UIImageSymbolConfiguration *configuration =
-        [UIImageSymbolConfiguration configurationWithPointSize:20.0
-                                                        weight:UIImageSymbolWeightRegular];
-    UIImage *symbol = [UIImage systemImageNamed:@"square.grid.2x2"
-                              withConfiguration:configuration];
-    return [symbol imageWithTintColor:[UIColor systemGrayColor]
-                        renderingMode:UIImageRenderingModeAlwaysOriginal];
+    NSArray<NSDictionary<NSString *, id> *> *entries =
+        self.slotEntriesSnapshot[@(slot)] ?: @[];
+    return CSLModuleSettingsIconForSlot(
+        slot,
+        entries,
+        CGSizeMake(CSLSpecifierIconSide, CSLSpecifierIconSide)
+    );
 }
 
 - (id)shortcutSummaryForSpecifier:(PSSpecifier *)specifier {
@@ -116,9 +245,12 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         return nil;
     }
 
-    NSUInteger count = CSLEntriesForSlot(slot).count;
+    NSUInteger count = self.slotEntriesSnapshot[@(slot)].count;
     if (count == 0) {
-        return @"None";
+        return CSLLocalizedText(@"Không có phím tắt", @"No Shortcuts");
+    }
+    if (CSLUsesVietnamese()) {
+        return [NSString stringWithFormat:@"%lu phím tắt", (unsigned long)count];
     }
     return [NSString stringWithFormat:@"%lu Shortcut%@",
         (unsigned long)count,
@@ -135,6 +267,14 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     }
 
     PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
+    NSString *identifier = specifier.identifier ?: [specifier propertyForKey:@"id"];
+    if ([identifier isEqualToString:CSLRepositorySpecifierIdentifier]) {
+        if (cell.imageView.image == nil) {
+            cell.imageView.image = CSLRepositoryIcon();
+        }
+        return;
+    }
+
     NSUInteger slot = [self slotForSpecifier:specifier];
     if (slot == NSNotFound) {
         return;
@@ -156,13 +296,22 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
 
 - (void)confirmRespring {
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Respring"
-                         message:@"SpringBoard restarts. Anything you have open is closed."
+        alertControllerWithTitle:CSLLocalizedText(
+                                     @"Khởi động lại giao diện",
+                                     @"Respring"
+                                 )
+                         message:CSLLocalizedText(
+                             @"Thao tác này sẽ khởi động lại nhanh Màn hình chính và Trung tâm điều khiển. Ứng dụng và dữ liệu của bạn không bị ảnh hưởng.",
+                             @"This briefly restarts the Home Screen and Control Center. Your apps and data are not affected."
+                         )
                   preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:CSLLocalizedText(@"Hủy", @"Cancel")
                                               style:UIAlertActionStyleCancel
                                             handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Respring"
+    [alert addAction:[UIAlertAction actionWithTitle:CSLLocalizedText(
+                                                         @"Khởi động lại",
+                                                         @"Respring"
+                                                     )
                                               style:UIAlertActionStyleDestructive
                                             handler:^(__unused UIAlertAction *action) {
         [self respring];
@@ -176,8 +325,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
     Class relaunchActionClass = NSClassFromString(@"SBSRelaunchAction");
     Class systemServiceClass = NSClassFromString(@"FBSSystemService");
     if (relaunchActionClass == Nil || systemServiceClass == Nil) {
-        [self showMessageWithTitle:@"Respring Unavailable"
-                           message:@"Restart SpringBoard from your package manager or a terminal instead."];
+        [self showRespringUnavailable];
         return;
     }
 
@@ -194,6 +342,7 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
             NSSelectorFromString(@"sharedService")
         );
         if (action == nil || service == nil) {
+            [self showRespringUnavailable];
             return;
         }
         ((void (*)(id, SEL, id, id))objc_msgSend)(
@@ -206,33 +355,39 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
         NSLog(@"[CCShortcutLauncher][Settings] RESPRING_EXCEPTION exception=%@ reason=%@",
               exception.name,
               exception.reason);
+        [self showRespringUnavailable];
     }
+}
+
+- (void)showRespringUnavailable {
+    [self showMessageWithTitle:CSLLocalizedText(
+                               @"Không thể khởi động lại giao diện",
+                               @"Respring Unavailable"
+                           )
+                       message:CSLLocalizedText(
+                           @"Hãy dùng tùy chọn Respring trong trình quản lý gói, sau đó quay lại Trung tâm điều khiển.",
+                           @"Use the Respring option in your package manager, then return to Control Center."
+                       )];
 }
 
 - (void)openModuleSlot:(PSSpecifier *)specifier {
     NSUInteger slot = [self slotForSpecifier:specifier];
+    if (slot == NSNotFound) {
+        return;
+    }
     CSLShortcutOrderController *controller =
-        [[CSLShortcutOrderController alloc] initWithSlot:slot == NSNotFound ? 0 : slot];
+        [[CSLShortcutOrderController alloc] initWithSlot:slot];
     [self.navigationController pushViewController:controller animated:YES];
 }
 
-- (id)preferenceValueForKey:(CFStringRef)key {
-    CFPreferencesAppSynchronize(CSLPreferencesDomain);
-    CFPropertyListRef value = CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
-    if (value == NULL) {
-        return nil;
+- (void)openRepository {
+    NSURL *url = [NSURL URLWithString:CSLRepositoryURLString];
+    if (url == nil) {
+        return;
     }
-
-    return CFBridgingRelease(value);
-}
-
-- (NSString *)preferenceStringForKey:(CFStringRef)key {
-    id object = [self preferenceValueForKey:key];
-    if (![object isKindOfClass:[NSString class]]) {
-        return nil;
-    }
-    return [(NSString *)object stringByTrimmingCharactersInSet:
-        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [[UIApplication sharedApplication] openURL:url
+                                       options:@{}
+                             completionHandler:nil];
 }
 
 - (void)showMessageWithTitle:(NSString *)title message:(NSString *)message {
@@ -267,36 +422,70 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
                 return;
             }
 
-            NSString *state = [self preferenceStringForKey:CFSTR("ResolverState")];
-            id catalogValue = [self preferenceValueForKey:CFSTR("ShortcutsCatalog")];
+            CFPreferencesAppSynchronize(CSLPreferencesDomain);
+            NSString *state =
+                CSLPreferenceStringWithoutSynchronizing(CFSTR("ResolverState"));
+            id catalogValue =
+                CSLPreferenceValueWithoutSynchronizing(CFSTR("ShortcutsCatalog"));
             NSUInteger count = [catalogValue isKindOfClass:[NSArray class]]
                 ? [(NSArray *)catalogValue count]
                 : 0;
 
             if ([state isEqualToString:@"catalog_ready"]) {
                 // Zero is a valid result: every Shortcut may have been deleted.
-                NSString *message = count > 0
-                    ? [NSString stringWithFormat:
-                        @"Cached %lu Shortcuts. Open a module below to choose which ones it runs.",
-                        (unsigned long)count]
-                    : @"No Shortcuts were found in My Shortcuts. The modules are now empty.";
-                [self finishLoadingWithTitle:@"My Shortcuts Loaded" message:message];
+                NSString *message = nil;
+                if (count > 0 && CSLUsesVietnamese()) {
+                    message = [NSString stringWithFormat:
+                        @"Đã tải %lu phím tắt. Mở một mô-đun bên dưới để chọn phím tắt sẽ chạy.",
+                        (unsigned long)count];
+                } else if (count > 0) {
+                    NSString *shortcutLabel = count == 1
+                        ? @"Shortcut is"
+                        : @"Shortcuts are";
+                    message = [NSString stringWithFormat:
+                        @"%lu %@ ready. Open a module below to choose which ones it runs.",
+                        (unsigned long)count,
+                        shortcutLabel];
+                } else {
+                    message = CSLLocalizedText(
+                        @"Không tìm thấy phím tắt. Hãy tạo một phím tắt trong ứng dụng Phím tắt rồi thử lại.",
+                        @"No Shortcuts were found. Create one in the Shortcuts app, then try again."
+                    );
+                }
+                [self finishLoadingWithTitle:CSLLocalizedText(
+                                                   @"Đã tải phím tắt của tôi",
+                                                   @"My Shortcuts Loaded"
+                                               )
+                                         message:message];
                 return;
             }
 
             if ([state isEqualToString:@"error"]) {
-                NSString *errorMessage =
-                    [self preferenceStringForKey:CFSTR("ResolverMessage")];
-                [self finishLoadingWithTitle:@"Unable to Load My Shortcuts"
-                                      message:errorMessage.length > 0
-                                          ? errorMessage
-                                          : @"Unlock the device and try again."];
+                NSString *errorMessage = CSLPreferenceStringWithoutSynchronizing(
+                    CFSTR("ResolverMessage")
+                );
+                NSString *message = CSLUsesVietnamese()
+                    ? @"Không thể tải phím tắt. Hãy mở khóa thiết bị rồi thử lại."
+                    : (errorMessage.length > 0
+                        ? errorMessage
+                        : @"Unlock the device and try again.");
+                [self finishLoadingWithTitle:CSLLocalizedText(
+                                                   @"Không thể tải phím tắt của tôi",
+                                                   @"Unable to Load My Shortcuts"
+                                               )
+                                         message:message];
                 return;
             }
 
             if (attempt >= 39) {
-                [self finishLoadingWithTitle:@"Catalog Load Timed Out"
-                                      message:@"The resolver did not respond. Check the system log and try again."];
+                [self finishLoadingWithTitle:CSLLocalizedText(
+                                                   @"Tải quá lâu",
+                                                   @"Loading Is Taking Too Long"
+                                               )
+                                         message:CSLLocalizedText(
+                                             @"Hãy đảm bảo thiết bị đã được mở khóa, sau đó chạm Tải phím tắt của tôi lần nữa.",
+                                             @"Make sure the device is unlocked, then tap Load My Shortcuts again."
+                                         )];
                 return;
             }
 
@@ -306,32 +495,37 @@ static const CGFloat CSLSpecifierIconSide = 29.0;
 }
 
 - (void)loadMyShortcuts {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self->_resolveGeneration++;
-        NSUInteger generation = self->_resolveGeneration;
+    _resolveGeneration++;
+    NSUInteger generation = _resolveGeneration;
 
-        CFPreferencesSetAppValue(
-            CFSTR("ResolverState"),
-            CFSTR("catalog_requested"),
-            CSLPreferencesDomain
-        );
-        CFPreferencesSetAppValue(CFSTR("ResolverMessage"), NULL, CSLPreferencesDomain);
-        CFPreferencesAppSynchronize(CSLPreferencesDomain);
+    CFPreferencesSetAppValue(
+        CFSTR("ResolverState"),
+        CFSTR("catalog_requested"),
+        CSLPreferencesDomain
+    );
+    CFPreferencesSetAppValue(CFSTR("ResolverMessage"), NULL, CSLPreferencesDomain);
+    CFPreferencesAppSynchronize(CSLPreferencesDomain);
 
-        self->_loadingAlert = [UIAlertController alertControllerWithTitle:@"Loading My Shortcuts"
-                                                                  message:@"Reading names, identifiers, and icons once\u2026"
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-        [self presentViewController:self->_loadingAlert animated:YES completion:nil];
+    _loadingAlert = [UIAlertController
+        alertControllerWithTitle:CSLLocalizedText(
+            @"Đang tải phím tắt của tôi",
+            @"Loading My Shortcuts"
+        )
+        message:CSLLocalizedText(
+            @"Đang lấy tên và biểu tượng phím tắt…",
+            @"Getting your Shortcut names and icons…"
+        )
+        preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:_loadingAlert animated:YES completion:nil];
 
-        CFNotificationCenterPostNotification(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            CSLCatalogRequestedNotification,
-            NULL,
-            NULL,
-            true
-        );
-        [self pollCatalogWithGeneration:generation attempt:0];
-    });
+    CFNotificationCenterPostNotification(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        CSLCatalogRequestedNotification,
+        NULL,
+        NULL,
+        true
+    );
+    [self pollCatalogWithGeneration:generation attempt:0];
 }
 
 @end
