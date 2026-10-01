@@ -15,3 +15,6 @@ Do not install an old binary and expect it to read changes to the new file.
 Native persistence tests are shared with OhMyRotate and exercise actual Objective-C
 code, including multi-process updates. No remote install/respring performed.
 Widget rendering / shortcut execution behavior intentionally unchanged.
+
+## Status
+CI 36814652907 passed package and native store tests. Source 3bfc7b8; no package delivered/installed. Packaging architecture verification pending.
