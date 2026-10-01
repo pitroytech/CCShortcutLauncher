@@ -18,3 +18,11 @@ Widget rendering / shortcut execution behavior intentionally unchanged.
 
 ## Status
 CI 36814652907 passed package and native store tests. Source 3bfc7b8; no package delivered/installed. Packaging architecture verification pending.
+
+## Rootless delivery 2026-10-01
+Source b896009, CI 36815366198 SUCCESS (macOS build + native store tests).
+1.6.1-config1 package: 344050 bytes.
+SHA256 4cc43643b22773f76a5ee3c9ffe3693d1621f8fe21599a589a7f3347ae1871b1.
+All three binaries verified arm64 + arm64e subtype 0x80000002, direct plist
+marker present, payload under /var/jb. Telegram messages 132/133 delivered.
+Owner installs and tests repeated respring; no agent install/respring.
