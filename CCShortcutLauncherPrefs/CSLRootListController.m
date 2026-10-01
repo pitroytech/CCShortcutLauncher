@@ -2,28 +2,25 @@
 #import "CSLShortcutOrderController.h"
 #import "../CSLModuleIcon.h"
 #import "../CSLSlotPreferences.h"
+#import "../CSLDirectPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 
-static CFStringRef const CSLPreferencesDomain =
-    CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
 static NSString *const CSLRepositoryURLString = @"https://dinhno12313.github.io";
 static NSString *const CSLRepositorySpecifierIdentifier = @"RepositoryLink";
 static NSString *const CSLModuleCountSpecifierIdentifier = @"ModuleCount";
 static NSString *const CSLSettingsVersionText =
-    @"CCShortcutLauncher 1.6.0";
+    @"CCShortcutLauncher 1.6.1-config1";
 
 /// The polling path synchronizes the domain once, then reads all related keys
 /// from the same snapshot instead of forcing a disk synchronization per key.
 static id CSLPreferenceValueWithoutSynchronizing(CFStringRef key) {
-    CFPropertyListRef value =
-        CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
-    return value != NULL ? CFBridgingRelease(value) : nil;
+    return [CSLDirectStore() snapshot][(__bridge NSString *)key];
 }
 
 static NSString *CSLPreferenceStringWithoutSynchronizing(CFStringRef key) {
@@ -457,7 +454,7 @@ static UIImage *CSLRepositoryIcon(void) {
                 return;
             }
 
-            CFPreferencesAppSynchronize(CSLPreferencesDomain);
+            // Direct plist reads; no cfprefsd sync.
             NSString *state =
                 CSLPreferenceStringWithoutSynchronizing(CFSTR("ResolverState"));
             id catalogValue =
@@ -533,13 +530,11 @@ static UIImage *CSLRepositoryIcon(void) {
     _resolveGeneration++;
     NSUInteger generation = _resolveGeneration;
 
-    CFPreferencesSetAppValue(
-        CFSTR("ResolverState"),
-        CFSTR("catalog_requested"),
-        CSLPreferencesDomain
-    );
-    CFPreferencesSetAppValue(CFSTR("ResolverMessage"), NULL, CSLPreferencesDomain);
-    CFPreferencesAppSynchronize(CSLPreferencesDomain);
+    if (![CSLDirectStore() update:@{@"ResolverState": @"catalog_requested",
+            @"ResolverMessage": NSNull.null} removingPrefixes:@[]]) {
+        NSLog(@"[CCShortcutLauncher][Prefs] request write failed: %@", CSLDirectStore().lastError);
+        return;
+    }
 
     _loadingAlert = [UIAlertController
         alertControllerWithTitle:CSLLocalizedText(

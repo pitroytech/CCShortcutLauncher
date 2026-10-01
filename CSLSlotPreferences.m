@@ -1,5 +1,6 @@
 #import "CSLSlotPreferences.h"
 #import "CSLModuleIcon.h"
+#import "CSLDirectPreferences.h"
 
 #import <CoreFoundation/CoreFoundation.h>
 
@@ -7,8 +8,6 @@ NSUInteger const CSLMinimumModuleSlotCount = 1;
 NSUInteger const CSLMaximumModuleSlotCount = 8;
 NSUInteger const CSLDefaultModuleSlotCount = 2;
 
-static CFStringRef const CSLPreferencesDomain =
-    CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static NSString *const CSLBaseModuleIdentifier =
     @"com.dinhnguyenx.ccshortcutlauncher";
 static NSString *const CSLSlotIdentifierSuffix = @".slot";
@@ -30,9 +29,7 @@ static CFStringRef const CSLControlCenterReloadProvidersNotification =
     CFSTR("com.opa334.ccsupport/ReloadProviders");
 
 static id CSLPreferenceValue(CFStringRef key) {
-    CFPreferencesAppSynchronize(CSLPreferencesDomain);
-    CFPropertyListRef value = CFPreferencesCopyAppValue(key, CSLPreferencesDomain);
-    return value != NULL ? CFBridgingRelease(value) : nil;
+    return [CSLDirectStore() snapshot][(__bridge NSString *)key];
 }
 
 NSString *CSLInterfaceLanguageCode(void) {
@@ -52,10 +49,8 @@ NSString *CSLLocalizedText(NSString *vietnamese, NSString *english) {
 }
 
 static void CSLSetPreferenceValue(CFStringRef key, id _Nullable value) {
-    CFPreferencesSetAppValue(key, (__bridge CFPropertyListRef)value, CSLPreferencesDomain);
-    if (!CFPreferencesAppSynchronize(CSLPreferencesDomain)) {
-        NSLog(@"[CCShortcutLauncher][Prefs] WRITE_FAILED key=%@", (__bridge NSString *)key);
-    }
+    if (![CSLDirectStore() update:@{(__bridge NSString *)key: value ?: NSNull.null} removingPrefixes:@[]])
+        NSLog(@"[CCShortcutLauncher][Prefs] WRITE_FAILED key=%@ error=%@", (__bridge NSString *)key, CSLDirectStore().lastError);
 }
 
 static NSString *CSLSlotStorageKey(NSUInteger slot) {
@@ -389,21 +384,10 @@ void CSLRemoveDiagnosticPreferences(void) {
             CSLModuleGlyphPathsKey,
         };
 
-        CFPreferencesAppSynchronize(CSLPreferencesDomain);
-        BOOL removedValue = NO;
-        for (size_t i = 0; i < sizeof(obsoleteKeys) / sizeof(obsoleteKeys[0]); i++) {
-            CFPropertyListRef value =
-                CFPreferencesCopyAppValue(obsoleteKeys[i], CSLPreferencesDomain);
-            if (value == NULL) {
-                continue;
-            }
-            CFRelease(value);
-            CFPreferencesSetAppValue(obsoleteKeys[i], NULL, CSLPreferencesDomain);
-            removedValue = YES;
-        }
-        if (removedValue) {
-            CFPreferencesAppSynchronize(CSLPreferencesDomain);
-        }
+        NSMutableDictionary *removed = [NSMutableDictionary dictionary];
+        for (size_t i = 0; i < sizeof(obsoleteKeys) / sizeof(obsoleteKeys[0]); i++)
+            removed[(__bridge NSString *)obsoleteKeys[i]] = NSNull.null;
+        [CSLDirectStore() update:removed removingPrefixes:@[]];
     });
 }
 

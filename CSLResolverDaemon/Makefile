@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = cslresolved
 
-cslresolved_FILES = main.m
+cslresolved_FILES = main.m ../PTPreferenceStore.m
 cslresolved_CFLAGS = -fobjc-arc -fmodules-cache-path=$(CURDIR)/../.theos/module-cache
 cslresolved_CODESIGN_FLAGS = -Sentitlements.plist
 cslresolved_FRAMEWORKS = Foundation CoreFoundation

@@ -93,3 +93,12 @@ jobs:
           name: CCShortcutLauncher ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
           files: packages/*.deb
+
+  preference-store-tests:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test direct plist persistence
+        run: |
+          clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation -I. tools/test-preference-store.m PTPreferenceStore.m -o /tmp/preferences-test
+          /tmp/preferences-test

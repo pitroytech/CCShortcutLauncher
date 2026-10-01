@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 
 #import "../CSLDiagnostics.h"
+#import "../CSLDirectPreferences.h"
 
 #import <fcntl.h>
 #import <sqlite3.h>
@@ -12,8 +13,6 @@ static NSString *const CSLDatabaseDirectory =
     @"/private/var/mobile/Library/Shortcuts";
 static NSString *const CSLDatabasePath =
     @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite";
-static CFStringRef const CSLPreferencesDomain =
-    CFSTR("com.dinhnguyenx.ccshortcutlauncher");
 static CFStringRef const CSLCatalogRequestedNotification =
     CFSTR("com.dinhnguyenx.ccshortcutlauncher/catalogRequested");
 
@@ -36,17 +35,8 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser);
 static void CSLStartWatchingDatabase(void);
 
 static BOOL CSLPublishResolverState(NSString *state, NSString *message) {
-    CFPreferencesSetAppValue(
-        CFSTR("ResolverState"),
-        (__bridge CFStringRef)state,
-        CSLPreferencesDomain
-    );
-    CFPreferencesSetAppValue(
-        CFSTR("ResolverMessage"),
-        message != nil ? (__bridge CFStringRef)message : NULL,
-        CSLPreferencesDomain
-    );
-    return CFPreferencesAppSynchronize(CSLPreferencesDomain);
+    return [CSLDirectStore() update:@{@"ResolverState": state,
+        @"ResolverMessage": message ?: NSNull.null} removingPrefixes:@[]];
 }
 
 static void CSLFinishWithError(NSString *message) {
@@ -173,12 +163,7 @@ static void CSLReportFailure(BOOL requestedByUser, NSString *message, NSString *
 }
 
 static BOOL CSLCatalogEqualsStoredCatalog(NSArray<NSDictionary<NSString *, id> *> *catalog) {
-    CFPropertyListRef value =
-        CFPreferencesCopyAppValue(CFSTR("ShortcutsCatalog"), CSLPreferencesDomain);
-    if (value == NULL) {
-        return NO;
-    }
-    id stored = CFBridgingRelease(value);
+    id stored = [CSLDirectStore() snapshot][@"ShortcutsCatalog"];
     return [stored isKindOfClass:[NSArray class]] &&
         [(NSArray *)stored isEqualToArray:catalog];
 }
@@ -408,19 +393,10 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
         return YES;
     }
 
-    CFPreferencesSetAppValue(
-        CFSTR("ShortcutsCatalog"),
-        (__bridge CFArrayRef)catalog,
-        CSLPreferencesDomain
-    );
-    NSNumber *catalogCount = @(catalog.count);
-    CFPreferencesSetAppValue(
-        CFSTR("ShortcutsCatalogCount"),
-        (__bridge CFNumberRef)catalogCount,
-        CSLPreferencesDomain
-    );
-    CSLHasLoadedCatalog = YES;
-    BOOL synchronized = CSLPublishResolverState(@"catalog_ready", nil);
+    BOOL synchronized = [CSLDirectStore() update:@{@"ShortcutsCatalog": catalog,
+        @"ShortcutsCatalogCount": @(catalog.count), @"ResolverState": @"catalog_ready",
+        @"ResolverMessage": NSNull.null} removingPrefixes:@[]];
+    CSLHasLoadedCatalog = synchronized;
     if (CSLDirectoryWatchSource == nil || CSLDatabaseWatchSource == nil) {
         CSLStartWatchingDatabase();
     }
@@ -432,7 +408,7 @@ static BOOL CSLLoadShortcutCatalog(BOOL requestedByUser) {
           (unsigned long)appIconRows,
           appColumn ?: @"none",
           synchronized);
-    return YES;
+    return synchronized;
 }
 
 static void CSLCatalogRequested(
